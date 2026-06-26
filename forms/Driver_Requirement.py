@@ -1,3 +1,4 @@
+from storage.serial_generator import generate_serial
 import streamlit as st
 
 from storage.excel_handler import save_lead
@@ -13,13 +14,12 @@ def render_driver_form():
         st.session_state.selected_service = None
         st.rerun()
 
-    with st.form("driver_form", clear_on_submit=True):
+    with st.form("driver_form"):
         lead_data = {}
         for field in DRIVER_FIELDS:
             lead_data[field["key"]] = render_field(field)
 
         submitted = st.form_submit_button("Submit")
-
     if submitted:
         errors = validate_form(lead_data)
 
@@ -27,5 +27,6 @@ def render_driver_form():
             for error in errors:
                 st.error(error)
         else:
+            lead_data["Lead ID"] = generate_serial(SERVICE_NAME)
             save_lead(SERVICE_NAME, lead_data)
             st.success("Your requirement has been submitted successfully!")

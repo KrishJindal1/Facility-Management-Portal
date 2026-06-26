@@ -1,16 +1,25 @@
 from openpyxl import load_workbook
-from pathlib import Path
+from storage.config import EXCEL_FILE
 
-EXCEL_FILE = Path("data/requirements.xlsx")
 
-def generate_serial():
+def generate_serial(service_name):
+
+    
 
     wb = load_workbook(EXCEL_FILE)
 
-    ws = wb["All Leads"]
+    ws = wb[service_name]
 
-    serial = ws.max_row
+    serial_number = ws.max_row
 
     wb.close()
 
-    return serial
+    prefix_map = {
+        "Cook": "Cook",
+        "Driver": "Driver",
+        "Security Guard": "Security"
+    }
+
+    prefix = prefix_map[service_name]
+
+    return f"{prefix}-{serial_number:03d}"
