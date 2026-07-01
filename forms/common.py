@@ -1,11 +1,11 @@
 COMMON_FIELDS = [
     {"key": "Name", "label": "Full Name", "type": "text", "required": True},
-    {"key": "Mobile", "label": "Mobile Number", "type": "text", "max_chars": 10, "required": True},
-    {"key": "Email", "label": "Email", "type": "text", "required": True},
-    {"key": "Address", "label": "Address", "type": "text", "required": False},
+    {"key": "Mobile", "label": "Mobile Number", "type": "text", "max_chars": 10, "required": True,"placeholder": "9876543210", "validation": "mobile"},
+    {"key": "Email", "label": "Email", "type": "text", "required": True, "validation": "email", "placeholder": "example@domain.com"},
+    {"key": "Address", "label": "Address", "type": "text", "required": False, "placeholder": "Enter your address"},
     {"key": "City", "label": "City", "type": "text", "required": True},
     {"key": "State", "label": "State", "type": "text", "required": False},
-    {"key": "Pincode", "label": "Pincode", "type": "text", "max_chars": 6, "required": False},
+    {"key": "Pincode", "label": "Pincode", "type": "text", "max_chars": 6, "required": False,"placeholder": "110001", "validation": "pincode"},
     {"key": "Start Date", "label": "Start Date", "type": "date", "required": False},
     {
         "key": "Preferred Timing",

@@ -44,6 +44,19 @@ def validate_budget(budget):
         return False, "Budget must be a positive value."
     return True, ""
 
+def validate_pincode(pincode):
+    pincode = str(pincode).strip()
+
+    if not pincode:
+        return True, ""      # Optional field
+
+    if not pincode.isdigit():
+        return False, "Pincode must contain digits only."
+
+    if len(pincode) != 6:
+        return False, "Pincode must be exactly 6 digits."
+
+    return True, ""
 
 def validate_form(data, required_fields=("Name", "Mobile", "Email", "City", "Budget")):
     """
@@ -61,6 +74,7 @@ def validate_form(data, required_fields=("Name", "Mobile", "Email", "City", "Bud
         "Email": validate_email,
         "City": validate_city,
         "Budget": validate_budget,
+        "Pincode": validate_pincode,
     }
 
     for field in required_fields:
