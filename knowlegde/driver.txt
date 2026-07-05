@@ -1,0 +1,34 @@
+====================================================
+2. DRIVER
+====================================================
+
+A driver provides transportation services for individuals or families.
+
+Available Types
+- Personal Driver
+- Full-Time Driver
+- Part-Time Driver
+- Temporary Driver
+
+Possible Responsibilities
+- Daily office travel
+- School pickup and drop
+- Airport pickup and drop
+- Outstation travel
+- Local city travel
+- Vehicle maintenance assistance
+
+Information Required from Customer
+- Full Name
+- Mobile Number
+- Email Address
+- Address
+- City
+- State
+- Pincode
+- Start Date
+- Preferred Timing
+- Monthly Budget
+- Vehicle Type
+- Driving Experience Required
+- Additional Notes

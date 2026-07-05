@@ -1,0 +1,13 @@
+Frequently Asked Questions
+
+Q: How do I book a service?
+A: Select a service and submit the requirement form.
+
+Q: Can I edit my requirement?
+A: Currently editing is not available.
+
+Q: Will I receive a Lead ID?
+A: Yes.
+
+Q: Is AI mandatory?
+A: No.

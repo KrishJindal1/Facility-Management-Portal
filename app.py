@@ -1,10 +1,10 @@
 import streamlit as st
-
+from streamlit_float import *
 from storage.excel_handler import create_excel_if_not_exists
 from forms.Cook_Requirement import render_cook_form
 from forms.Driver_Requirement import render_driver_form
 from forms.Security_Gaurd_Requirement import render_security_guard_form
-
+from component.chatbot_widget import render_chatbot
 st.set_page_config(
     page_title="HomeDesk — Hire Trusted Help",
     page_icon="🗝️",
@@ -159,14 +159,29 @@ def inject_css():
         }
         .section-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 
-        /* --- Service cards --- */
+        /* --- Service cards: floating, elevated cards --- */
         .service-card {
             background: var(--card);
             border: 1px solid var(--border);
             border-radius: 16px;
             padding: 1.6rem 1.2rem 1.1rem;
             text-align: center;
-            transition: border-color 0.15s ease, transform 0.15s ease;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 14px 34px -22px rgba(22,36,63,0.28);
+            transition: border-color 0.25s ease, transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        /* soft glowing blob tucked behind each card for depth */
+        .service-card::before {
+            content: "";
+            position: absolute;
+            top: -46px;
+            right: -46px;
+            width: 130px;
+            height: 130px;
+            background: radial-gradient(circle, rgba(232,163,61,0.18), transparent 70%);
+            border-radius: 50%;
+            pointer-events: none;
         }
         .service-card .icon-badge {
             width: 56px;
@@ -178,13 +193,32 @@ def inject_css():
             align-items: center;
             justify-content: center;
             font-size: 1.5rem;
+            position: relative;
+            box-shadow: 0 14px 24px -12px rgba(199,127,31,0.55);
+            animation: badgeFloat 3.6s ease-in-out infinite;
         }
-        .service-card h3 { font-size: 1.08rem; margin: 0 0 0.3rem; }
-        .service-card p { font-size: 0.85rem; color: var(--muted); margin: 0; min-height: 2.4rem; }
+        /* stagger each card's float so they don't bob in lockstep */
+        div[class*="st-key-card_cook"] .icon-badge { animation-delay: 0s; }
+        div[class*="st-key-card_driver"] .icon-badge { animation-delay: 0.5s; }
+        div[class*="st-key-card_security_guard"] .icon-badge { animation-delay: 1s; }
+
+        @keyframes badgeFloat {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-6px); }
+        }
+
+        .service-card h3 { font-size: 1.08rem; margin: 0 0 0.3rem; position: relative; }
+        .service-card p { font-size: 0.85rem; color: var(--muted); margin: 0; min-height: 2.4rem; position: relative; }
 
         div[class*="st-key-card_"]:hover .service-card {
             border-color: var(--amber-deep);
-            transform: translateY(-3px);
+            transform: translateY(-8px);
+            box-shadow: 0 30px 48px -20px rgba(22,36,63,0.35);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .service-card .icon-badge { animation: none; }
+            .service-card, div[class*="st-key-card_"]:hover .service-card { transition: none; }
         }
 
         /* --- Buttons --- */
@@ -282,6 +316,76 @@ def inject_css():
     border: 1px solid var(--amber) !important;
     box-shadow: 0 0 0 3px rgba(232,163,61,0.2) !important;
     outline: none !important;
+}
+/* Floating Chat */
+
+div[data-testid="stChatMessage"]{
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius:12px;
+    padding:10px;
+}
+
+/* The chat text was inheriting an invisible color from Streamlit's own
+   theme — force it to the brand ink color everywhere text can appear
+   inside a chat bubble. */
+div[data-testid="stChatMessage"] p,
+div[data-testid="stChatMessage"] span,
+div[data-testid="stChatMessage"] li,
+div[data-testid="stChatMessage"] [data-testid="stMarkdownContainer"],
+div[data-testid="stChatMessageContent"] p {
+    color: var(--ink) !important;
+}
+
+/* ================= CHAT INPUT ================= */
+
+/* Entire chat input area */
+div[data-testid="stChatInput"]{
+    background: var(--card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 14px !important;
+    padding: 0.35rem !important;
+    margin-top: 0.7rem !important;
+}
+
+/* Inner container */
+div[data-testid="stChatInput"] > div{
+    background: var(--card) !important;
+}
+
+/* Textarea */
+div[data-testid="stChatInput"] textarea{
+    background: var(--card) !important;
+    color: var(--ink) !important;
+    caret-color: var(--ink) !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* Placeholder */
+div[data-testid="stChatInput"] textarea::placeholder{
+    color: var(--muted) !important;
+    opacity: 1 !important;
+}
+
+/* Remove black focus */
+div[data-testid="stChatInput"] textarea:focus{
+    background: var(--card) !important;
+    color: var(--ink) !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* Send button */
+div[data-testid="stChatInput"] button{
+    background: var(--amber) !important;
+    color: white !important;
+    border-radius: 10px !important;
+    border: none !important;
+}
+
+div[data-testid="stChatInput"] button:hover{
+    background: var(--amber-deep) !important;
 }
         </style>
         """,
@@ -381,13 +485,18 @@ SERVICE_RENDERERS = {
 def main():
     inject_css()
     render_brand_bar()
+    float_init()
+    if "chat_open" not in st.session_state:
+        st.session_state.chat_open = False
 
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
     selected = st.session_state.selected_service
     if selected is None:
         render_home()
     else:
         SERVICE_RENDERERS[selected]()
-
+    render_chatbot()
 
 if __name__ == "__main__":
     main()

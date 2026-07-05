@@ -1,0 +1,36 @@
+====================================================
+3. SECURITY GUARD
+====================================================
+
+A security guard provides protection and security services for homes, apartments, offices and commercial establishments.
+
+Available Types
+- Residential Security Guard
+- Commercial Security Guard
+
+Available Shifts
+- Day Shift
+- Night Shift
+- 24 Hour Shift
+
+Possible Responsibilities
+- Visitor monitoring
+- Entry and exit management
+- Property surveillance
+- Parking supervision
+- Emergency reporting
+- Gate security
+
+Information Required from Customer
+- Full Name
+- Mobile Number
+- Email Address
+- Address
+- City
+- State
+- Pincode
+- Start Date
+- Preferred Shift
+- Monthly Budget
+- Number of Guards Required
+- Additional Notes

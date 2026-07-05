@@ -1,0 +1,16 @@
+Facility Management Portal
+
+Services Offered
+
+- Cook
+- Driver
+- Security Guard
+
+Users can submit service requirements through structured forms.
+
+Every request receives a unique Lead ID.
+
+The portal currently supports AI-assisted requirement collection.
+
+
+

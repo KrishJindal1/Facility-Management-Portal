@@ -1,0 +1,58 @@
+{
+  "Metro": [
+    "Delhi",
+    "Mumbai",
+    "Bengaluru",
+    "Chennai",
+    "Hyderabad",
+    "Kolkata",
+    "Pune",
+    "Ahmedabad"
+  ],
+
+  "Tier 1": [
+    "Jaipur",
+    "Lucknow",
+    "Chandigarh",
+    "Indore",
+    "Bhopal",
+    "Nagpur",
+    "Surat",
+    "Patna",
+    "Kanpur",
+    "Ludhiana",
+    "Coimbatore",
+    "Visakhapatnam",
+    "Kochi",
+    "Vadodara",
+    "Nashik"
+  ],
+
+  "Tier 2": [
+    "Agra",
+    "Ajmer",
+    "Aligarh",
+    "Amritsar",
+    "Bareilly",
+    "Bhubaneswar",
+    "Dehradun",
+    "Dhanbad",
+    "Gwalior",
+    "Jabalpur",
+    "Jammu",
+    "Jodhpur",
+    "Mangalore",
+    "Meerut",
+    "Mysuru",
+    "Noida",
+    "Prayagraj",
+    "Raipur",
+    "Rajkot",
+    "Ranchi",
+    "Shimla",
+    "Siliguri",
+    "Thrissur",
+    "Udaipur",
+    "Varanasi"
+  ]
+}

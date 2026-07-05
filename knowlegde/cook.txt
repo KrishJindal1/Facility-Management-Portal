@@ -1,0 +1,38 @@
+====================================================
+1. COOK
+====================================================
+
+A cook prepares meals according to the customer's requirements.
+
+Available Types
+- Part-Time Cook
+- Full-Time Cook
+- Live-In Cook
+
+Possible Responsibilities
+- Breakfast preparation
+- Lunch preparation
+- Dinner preparation
+- Snacks preparation
+- Vegetarian cooking
+- Non-Vegetarian cooking
+- North Indian cuisine
+- South Indian cuisine
+- Chinese cuisine
+- Continental cuisine
+- Kitchen cleaning after cooking
+
+Information Required from Customer
+- Full Name
+- Mobile Number
+- Email Address
+- Address
+- City
+- State
+- Pincode
+- Start Date
+- Preferred Timing
+- Monthly Budget
+- Cuisine Preference
+- Meals Per Day
+- Additional Notes
