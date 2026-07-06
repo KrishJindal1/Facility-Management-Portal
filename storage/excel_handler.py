@@ -144,3 +144,36 @@ def save_lead(service_name, lead_data):
             "Status": lead_data["Status"]
         }
     )
+
+
+def find_latest_request_by_mobile(mobile):
+
+    workbook = load_workbook(EXCEL_FILE)
+
+    for sheet_name in workbook.sheetnames[::-1]:
+
+        sheet = workbook[sheet_name]
+
+        headers = [cell.value for cell in sheet[1]]
+
+        if "Mobile" not in headers:
+            continue
+
+        mobile_col = headers.index("Mobile") + 1
+
+        for row in range(sheet.max_row, 1, -1):
+
+            if str(sheet.cell(row, mobile_col).value).strip() == str(mobile).strip():
+
+                data = {}
+
+                for col, header in enumerate(headers, start=1):
+                    data[header] = sheet.cell(row, col).value
+
+                data["Service"] = sheet_name
+
+                return data
+
+    workbook.close()
+
+    return None

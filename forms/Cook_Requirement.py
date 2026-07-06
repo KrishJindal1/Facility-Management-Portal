@@ -1,5 +1,5 @@
 import streamlit as st
-
+from utils.local_storage import save_request
 from storage.excel_handler import save_lead
 from utils.validators import validate_form
 from forms.cook_schema import COOK_FIELDS, SERVICE_NAME
@@ -203,4 +203,9 @@ def render_cook_form():
         else:
             lead_data["Lead ID"] = generate_serial(SERVICE_NAME)
             save_lead(SERVICE_NAME, lead_data)
+            save_request(
+                lead_data["Lead ID"],
+                lead_data["Mobile"],
+               SERVICE_NAME
+            )
             st.success("Your requirement has been submitted successfully!")

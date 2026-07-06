@@ -5,6 +5,7 @@ from utils.validators import validate_form
 from forms.driver_schema import DRIVER_FIELDS, SERVICE_NAME
 from forms.field_renderer import render_field
 from storage.serial_generator import generate_serial
+from utils.local_storage import save_request
 
 # Badge shown in the page header — matches the icon already used for this
 # service on the home page card, so the same visual "character" carries
@@ -203,4 +204,10 @@ def render_driver_form():
         else:
             lead_data["Lead ID"] = generate_serial(SERVICE_NAME)
             save_lead(SERVICE_NAME, lead_data)
+            save_request(
+                lead_data["Lead ID"],
+                lead_data["Mobile"],
+                SERVICE_NAME
+            )
+            
             st.success("Your requirement has been submitted successfully!")
