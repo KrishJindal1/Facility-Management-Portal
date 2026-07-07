@@ -205,7 +205,7 @@ def render_security_guard_form():
             save_lead(SERVICE_NAME, lead_data)
             save_request(
                 lead_data["Lead ID"],
-                lead_data["Mobile"],
+                lead_data.get("Mobile"),
                 SERVICE_NAME
             )
             

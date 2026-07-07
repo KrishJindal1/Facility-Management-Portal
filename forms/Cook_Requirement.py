@@ -205,7 +205,7 @@ def render_cook_form():
             save_lead(SERVICE_NAME, lead_data)
             save_request(
                 lead_data["Lead ID"],
-                lead_data["Mobile"],
-               SERVICE_NAME
+                lead_data.get("Mobile"),
+                SERVICE_NAME
             )
             st.success("Your requirement has been submitted successfully!")

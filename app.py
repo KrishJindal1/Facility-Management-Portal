@@ -5,6 +5,9 @@ from forms.Cook_Requirement import render_cook_form
 from forms.Driver_Requirement import render_driver_form
 from forms.Security_Gaurd_Requirement import render_security_guard_form
 from component.chatbot_widget import render_chatbot
+from utils.local_storage import get_request, save_request, delete_request
+from services.lead_lookup import find_lead_by_mobile
+
 st.set_page_config(
     page_title="HomeDesk — Hire Trusted Help",
     page_icon="🗝️",
@@ -88,37 +91,43 @@ def inject_css():
             line-height: 1.55;
         }
 
-        /* --- Token stub: signature element --- */
-        .token-stub {
+        /* --- Token card: signature element ---
+             This used to be a plain markdown div (.token-stub). It's now
+             the outer Streamlit container itself that carries the card
+             look, so a real text input / button can sit inside the same
+             bordered box instead of floating below it. Visual appearance
+             (colors, radius, shadow, spacing) is unchanged. */
+        div[class*="st-key-token_card"] {
             background: var(--card);
             border: 1px solid var(--border);
             border-radius: 14px;
             padding: 1.4rem 1.6rem 1.2rem;
             box-shadow: 0 18px 40px -24px rgba(22,36,63,0.35);
             position: relative;
-            max-width: 280px;
+            max-width: 320px;
             margin-left: auto;
         }
-        .token-stub .eyebrow {
+        .token-eyebrow {
             font-size: 0.68rem;
             text-transform: uppercase;
             letter-spacing: 0.1em;
             color: var(--muted);
         }
-        .token-stub .number {
+        .token-number {
             font-family: 'IBM Plex Mono', monospace;
-            font-size: 1.9rem;
+            font-size: 1.6rem;
             font-weight: 600;
             color: var(--ink);
             margin: 0.15rem 0 0.9rem;
+            line-height: 1.3;
         }
-        .token-stub .perforation {
+        .token-perforation {
             border-top: 2px dashed var(--border);
             position: relative;
             margin: 0 -1.6rem;
         }
-        .token-stub .perforation::before,
-        .token-stub .perforation::after {
+        .token-perforation::before,
+        .token-perforation::after {
             content: "";
             position: absolute;
             top: -8px;
@@ -127,9 +136,9 @@ def inject_css():
             border-radius: 50%;
             background: var(--paper);
         }
-        .token-stub .perforation::before { left: -8px; }
-        .token-stub .perforation::after { right: -8px; }
-        .token-stub .status-row {
+        .token-perforation::before { left: -8px; }
+        .token-perforation::after { right: -8px; }
+        .token-status-row {
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -137,12 +146,26 @@ def inject_css():
             font-family: 'IBM Plex Mono', monospace;
             font-size: 0.72rem;
         }
-        .token-stub .pill {
+        .token-pill {
             background: rgba(31,122,92,0.12);
             color: var(--teal);
             padding: 0.15rem 0.55rem;
             border-radius: 999px;
             font-weight: 600;
+        }
+        /* the mobile lookup input + buttons, embedded inside the same card */
+        div[class*="st-key-token_card"] .stTextInput {
+            margin-top: 0.9rem;
+        }
+        div[class*="st-key-token_card"] .stButton > button {
+            margin-top: 0.6rem;
+            background: var(--ink);
+            color: white;
+            border: none;
+        }
+        div[class*="st-key-token_card"] .stButton > button:hover { background: var(--amber-deep); }
+        div[class*="st-key-token_card"] .streamlit-expanderHeader {
+            font-size: 0.82rem;
         }
 
         /* --- Section label --- */
@@ -299,6 +322,17 @@ def inject_css():
     border: 1px solid var(--border);
 }
 
+/* Inline validation / helper hints (used by field_renderer + hero lookup) */
+.field-hint {
+    font-size: 0.78rem;
+    margin-top: 0.4rem;
+    margin-bottom: 0.2rem;
+    line-height: 1.3;
+}
+.field-hint.warning { color: var(--amber-deep); }
+.field-hint.error { color: #C0392B; }
+.field-hint.info { color: var(--muted); }
+
 /* Cursor Color */
 
 .stTextInput input,
@@ -407,34 +441,78 @@ def render_brand_bar():
 
 def render_hero():
     left, right = st.columns([1.3, 1], gap="large")
+
     with left:
         st.markdown(
-            """
-            <div class="hero-eyebrow">Household staffing, simplified</div>
-            <div class="hero-title">Tell us who you need.<br>We'll take it from there.</div>
-            <p class="hero-sub">
-                Share a few details about the help you're looking for —
-                a cook, a driver, or a security guard — and your request
-                joins our queue with its own tracked token.
-            </p>
-            """,
+            """<div class="hero-eyebrow">Household staffing, simplified</div><div class="hero-title">Tell us who you need.<br>We'll take it from there.</div><p class="hero-sub">Share a few details about the help you're looking for — a cook, a driver, or a security guard — and your request joins our queue with its own tracked token.</p>""",
             unsafe_allow_html=True,
         )
+
     with right:
-        st.markdown(
-            """
-            <div class="token-stub">
-                <div class="eyebrow">Sample token</div>
-                <div class="number">No. 014</div>
-                <div class="perforation"></div>
-                <div class="status-row">
-                    <span>SECURITY GUARD</span>
-                    <span class="pill">NEW</span>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        request = get_request()
+
+        with st.container(key="token_card"):
+            if request:
+                lead_id = request.get("lead_id") or "—"
+                service = (request.get("service") or "").upper()
+
+                st.markdown(
+                    f"""<div class="token-eyebrow">YOUR REQUEST</div><div class="token-number">{lead_id}</div><div class="token-perforation"></div><div class="token-status-row"><span>{service}</span><span class="token-pill">SUBMITTED</span></div>""",
+                    unsafe_allow_html=True,
+                )
+
+                with st.expander("View request details"):
+                    details = find_lead_by_mobile(request.get("mobile"))
+                    if details:
+                        for field_key, field_value in details.items():
+                            st.markdown(f"**{field_key}:** {field_value}")
+                    else:
+                        st.caption(
+                            "We couldn't load the full details for this "
+                            "request right now — please check back later."
+                        )
+
+                if st.button("Not you? Clear this", key="clear_request_btn", use_container_width=True):
+                    delete_request()
+                    st.rerun()
+
+            else:
+                st.markdown(
+                    """<div class="token-eyebrow">FIND YOUR REQUEST</div><div class="token-number">Track an existing request</div><div class="token-perforation"></div>""",
+                    unsafe_allow_html=True,
+                )
+
+                mobile_input = st.text_input(
+                    "Mobile number",
+                    key="hero_lookup_mobile",
+                    placeholder="10-digit mobile number",
+                    label_visibility="collapsed",
+                    max_chars=10,
+                )
+
+                if st.button("Find my request", key="hero_lookup_btn", use_container_width=True):
+                    mobile_clean = (mobile_input or "").strip()
+
+                    if not mobile_clean:
+                        st.markdown(
+                            '<div class="field-hint warning">⚠ Enter your mobile number first</div>',
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        found = find_lead_by_mobile(mobile_clean)
+
+                        if found:
+                            save_request(
+                                found.get("Lead ID"),
+                                mobile_clean,
+                                found.get("Service"),
+                            )
+                            st.rerun()
+                        else:
+                            st.markdown(
+                                '<div class="field-hint warning">⚠ No request found for that number</div>',
+                                unsafe_allow_html=True,
+                            )
 
 
 SERVICES = [
