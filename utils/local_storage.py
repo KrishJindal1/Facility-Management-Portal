@@ -4,9 +4,7 @@ storage = LocalStorage()
 
 
 def save_request(lead_id, mobile, service):
-    """
-    Save the user's latest request in browser local storage.
-    """
+
     storage.setItem(
         "latest_request",
         {
@@ -18,22 +16,21 @@ def save_request(lead_id, mobile, service):
 
 
 def get_request():
-    """
-    Get the latest stored request.
-    Returns None if nothing is stored.
-    """
-    return storage.getItem("latest_request")
+
+    data = storage.getItem("latest_request")
+
+    if not data:
+        return None
+
+    return data
 
 
 def delete_request():
-    """
-    Remove the stored request from browser local storage.
-    """
-    storage.removeItem("latest_request")
+
+    # Instead of removing the key, overwrite it with None.
+    storage.setItem("latest_request", None)
 
 
 def has_request():
-    """
-    Returns True if a request exists.
-    """
-    return storage.getItem("latest_request") is not None
+
+    return get_request() is not None
