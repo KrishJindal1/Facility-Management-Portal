@@ -14,10 +14,21 @@ logger = logging.getLogger(__name__)
 def _normalize_database_url(url: str) -> str:
     """
     Normalizes PostgreSQL URL schemes for SQLAlchemy compatibility.
+    Strips accidental surrounding quotes, whitespace, and variable name prefixes.
     Replaces deprecated 'postgres://' or bare 'postgresql://' with psycopg2 driver scheme.
     """
     if not url:
         return ""
+    url = url.strip()
+    # Strip any accidental wrapping quotes: "..." or '...'
+    if (url.startswith('"') and url.endswith('"')) or (url.startswith("'") and url.endswith("'")):
+        url = url[1:-1].strip()
+    # Strip accidental "DATABASE_URL=" or "DATABASE_URL = " prefix
+    if url.startswith("DATABASE_URL"):
+        url = url.split("=", 1)[-1].strip()
+        if (url.startswith('"') and url.endswith('"')) or (url.startswith("'") and url.endswith("'")):
+            url = url[1:-1].strip()
+
     if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql+psycopg2://", 1)
     if url.startswith("postgresql://") and not url.startswith("postgresql+"):

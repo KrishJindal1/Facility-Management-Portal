@@ -11,7 +11,7 @@ Verifies critical portal functionality:
 """
 import unittest
 from datetime import datetime, date
-from database.connection import get_db
+from database.connection import get_db, _normalize_database_url
 from database.models import Organization, User, Lead, CookRequirement, DriverRequirement, SecurityGuardRequirement
 from database.repository import (
     save_lead_to_db,
@@ -262,6 +262,20 @@ class TestApplicationCore(unittest.TestCase):
         provider = get_ai_provider("mock")
         reply = provider.ask("What is HomeDesk?")
         self.assertIn("HomeDesk", reply)
+
+    def test_17_normalize_database_url_sanitization(self):
+        """Verifies URL normalization handles quotes, whitespace, and variable prefix."""
+        raw_url = "postgresql://user:pass@host:5432/dbname"
+        expected = "postgresql+psycopg2://user:pass@host:5432/dbname"
+
+        self.assertEqual(_normalize_database_url(raw_url), expected)
+        self.assertEqual(_normalize_database_url(f'"{raw_url}"'), expected)
+        self.assertEqual(_normalize_database_url(f"'{raw_url}'"), expected)
+        self.assertEqual(_normalize_database_url(f"  {raw_url}  "), expected)
+        self.assertEqual(_normalize_database_url(f"DATABASE_URL = {raw_url}"), expected)
+        self.assertEqual(_normalize_database_url(f"DATABASE_URL='{raw_url}'"), expected)
+        self.assertEqual(_normalize_database_url("postgres://u:p@h:5432/db"), "postgresql+psycopg2://u:p@h:5432/db")
+        self.assertEqual(_normalize_database_url(""), "")
 
 
 if __name__ == "__main__":
