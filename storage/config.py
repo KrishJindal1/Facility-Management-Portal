@@ -1,3 +1,7 @@
-from pathlib import Path
+"""
+Storage configuration re-exporting from root config.
+Maintains backward compatibility with existing storage modules.
+"""
+from config import EXCEL_FILE
 
-EXCEL_FILE = Path("data/requirements.xlsx")
+__all__ = ["EXCEL_FILE"]

@@ -1,8 +1,7 @@
-from pathlib import Path
 from functools import lru_cache
 import json
+from config import KNOWLEDGE_DIR
 
-KNOWLEDGE_DIR = Path(__file__).resolve().parent.parent / "knowlegde"
 
 
 def load_text_file(path):

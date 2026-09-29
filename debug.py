@@ -1,6 +1,8 @@
 from openpyxl import load_workbook
+from config import EXCEL_FILE
 
-wb = load_workbook("data/requirements.xlsx")
+wb = load_workbook(EXCEL_FILE)
+
 
 for sheet in wb.sheetnames:
     print(f"\n--- {sheet} ---")

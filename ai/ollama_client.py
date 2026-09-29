@@ -1,27 +1,17 @@
-import ollama
+"""
+Backward-compatibility wrapper for legacy callers of ask_ai.
+Delegates to the configured AI provider abstraction.
+"""
+from ai.providers import get_ai_provider
+from config import OLLAMA_MODEL
 
-MODEL = "llama3.1:8b"
+MODEL = OLLAMA_MODEL
 
 
 def ask_ai(prompt: str) -> str:
     """
-    Sends a prompt to the local Ollama model and returns the response.
+    Backward-compatible entry point for asking the AI model.
+    Routes to the configured active provider (Cloud or Ollama).
     """
-
-    try:
-
-        response = ollama.chat(
-            model=MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        )
-
-        return response["message"]["content"]
-
-    except Exception as e:
-
-        return f"Error communicating with AI: {str(e)}"
+    provider = get_ai_provider()
+    return provider.ask(prompt)

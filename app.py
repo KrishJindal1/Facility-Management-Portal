@@ -1,12 +1,21 @@
 import streamlit as st
 from streamlit_float import *
-from storage.excel_handler import create_excel_if_not_exists
+from storage.excel_handler import create_excel_if_not_exists, get_excel_export_bytes
 from forms.Cook_Requirement import render_cook_form
 from forms.Driver_Requirement import render_driver_form
 from forms.Security_Gaurd_Requirement import render_security_guard_form
 from component.chatbot_widget import render_chatbot
 from utils.local_storage import get_request, save_request, delete_request
 from services.lead_lookup import find_lead_by_mobile
+from services.tenant_service import get_all_tenants, get_current_tenant, set_current_tenant
+from services.auth_service import (
+    authenticate_user,
+    register_user,
+    is_authenticated,
+    get_current_user,
+    login_session,
+    logout_session,
+)
 
 st.set_page_config(
     page_title="HomeDesk — Hire Trusted Help",
@@ -15,7 +24,17 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-create_excel_if_not_exists()
+# Startup initialization & database health check
+try:
+    create_excel_if_not_exists()
+except Exception as _init_err:
+    import logging
+    logging.getLogger("homedesk.app").error("Startup initialization warning: %s", _init_err)
+
+from database.connection import check_connection
+_db_ok, _db_msg = check_connection()
+if not _db_ok:
+    st.error(f"⚠️ **Database Unavailable**: {_db_msg}. Please verify your `DATABASE_URL` configuration.")
 
 if "selected_service" not in st.session_state:
     st.session_state.selected_service = None
@@ -428,15 +447,140 @@ div[data-testid="stChatInput"] button:hover{
 
 
 def render_brand_bar():
-    st.markdown(
-        """
-        <div class="brand-bar">
-            <div class="brand">Home<span>Desk</span></div>
-            <div class="tagline">Verified household help, on your terms</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    authenticated = is_authenticated()
+    user = get_current_user()
+    current_tenant = get_current_tenant()
+
+    col_brand, col_auth = st.columns([1.5, 1.5])
+    with col_brand:
+        st.markdown(
+            f"""
+            <div class="brand-bar" style="margin-bottom: 0.4rem; padding-bottom: 0.4rem; border-bottom: none;">
+                <div class="brand">Home<span>Desk</span></div>
+                <div class="tagline">Facility Portal &middot; <b>{current_tenant['name']}</b></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with col_auth:
+        if authenticated and user:
+            col_user, col_logout = st.columns([2.2, 0.8])
+            with col_user:
+                st.markdown(
+                    f"""
+                    <div style="text-align: right; padding-top: 0.4rem; font-size: 0.82rem; color: var(--ink);">
+                        <span>👤 <b>{user['name']}</b></span>
+                        <span style="background: rgba(31,122,92,0.12); color: var(--teal); padding: 0.15rem 0.5rem; border-radius: 999px; margin-left: 0.3rem; font-weight: 600; font-size: 0.72rem;">{user.get('role', 'staff').upper()}</span>
+                        <div style="font-size: 0.74rem; color: var(--muted); margin-top: 0.1rem;">🏢 {user['organization_name']} (Locked)</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with col_logout:
+                if st.button("Sign Out", key="nav_logout_btn", use_container_width=True):
+                    logout_session()
+                    delete_request()
+                    st.rerun()
+        else:
+            st.markdown(
+                """
+                <div style="text-align: right; padding-top: 0.8rem; font-size: 0.82rem; color: var(--muted);">
+                    🔒 <i>Authentication Required</i>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.markdown('<div style="border-bottom: 1px solid var(--border); margin-bottom: 1.8rem;"></div>', unsafe_allow_html=True)
+
+
+def render_auth_screen():
+    col1, col2, col3 = st.columns([1, 1.4, 1])
+    with col2:
+        st.markdown(
+            """
+            <div style="text-align: center; margin-bottom: 1.5rem; margin-top: 0.5rem;">
+                <h2 style="font-family: 'Fraunces', serif; color: var(--ink); margin-bottom: 0.3rem;">Facility Management Portal</h2>
+                <p style="color: var(--muted); font-size: 0.9rem;">Sign in to access your organization's requests, service forms, and exports.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        tab_login, tab_register = st.tabs(["🔑 Sign In", "📝 Register Account"])
+
+        with tab_login:
+            with st.form("login_form"):
+                email = st.text_input("Work Email", placeholder="name@company.com", key="login_email")
+                password = st.text_input("Password", type="password", placeholder="Enter your password", key="login_pwd")
+                login_submitted = st.form_submit_button("Sign In to Portal", use_container_width=True)
+
+            if login_submitted:
+                success, msg, user_data = authenticate_user(email, password)
+                if success and user_data:
+                    login_session(user_data)
+                    st.success(f"Welcome back, {user_data['name']}! Entering portal...")
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+            with st.expander("ℹ️ Demo Organization Credentials"):
+                st.markdown(
+                    """
+                    **Organization 1 (HomeDesk Primary):**
+                    - Email: `admin@homedesk.com`
+                    - Password: `Password123!`
+
+                    **Organization 2 (Acme Facilities Group):**
+                    - Email: `admin@acme.com`
+                    - Password: `Password123!`
+                    """
+                )
+
+        with tab_register:
+            with st.form("register_form"):
+                reg_name = st.text_input("Full Name", placeholder="e.g. Jane Doe", key="reg_name")
+                reg_email = st.text_input("Work Email", placeholder="jane@company.com", key="reg_email")
+                reg_mobile = st.text_input("Mobile Number", placeholder="10-digit number", max_chars=10, key="reg_mobile")
+                reg_pwd = st.text_input("Password (min 8 chars, 1 letter, 1 number)", type="password", key="reg_pwd")
+                reg_confirm = st.text_input("Confirm Password", type="password", key="reg_confirm")
+
+                all_orgs = get_all_tenants()
+                org_options = [o["name"] for o in all_orgs] + ["+ Create New Organization"]
+                selected_org = st.selectbox("Organization", options=org_options, key="reg_org_select")
+
+                new_org_name = ""
+                selected_org_id = None
+                if selected_org == "+ Create New Organization":
+                    new_org_name = st.text_input("New Organization Name", placeholder="e.g. Zenith Tech Corp", key="reg_new_org")
+                else:
+                    for o in all_orgs:
+                        if o["name"] == selected_org:
+                            selected_org_id = o["id"]
+                            break
+
+                reg_submitted = st.form_submit_button("Register & Create Account", use_container_width=True)
+
+            if reg_submitted:
+                if reg_pwd != reg_confirm:
+                    st.error("Passwords do not match. Please re-enter your password.")
+                else:
+                    success, msg, user_data = register_user(
+                        name=reg_name,
+                        email=reg_email,
+                        mobile=reg_mobile,
+                        password=reg_pwd,
+                        organization_id=selected_org_id,
+                        new_org_name=new_org_name,
+                    )
+                    if success and user_data:
+                        login_session(user_data)
+                        st.success(f"Account registered for {user_data['organization_name']}! Entering portal...")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
 
 
 def render_hero():
@@ -449,6 +593,7 @@ def render_hero():
         )
 
     with right:
+        current_tenant = get_current_tenant()
         request = get_request()
 
         with st.container(key="token_card"):
@@ -457,12 +602,12 @@ def render_hero():
                 service = (request.get("service") or "").upper()
 
                 st.markdown(
-                    f"""<div class="token-eyebrow">YOUR REQUEST</div><div class="token-number">{lead_id}</div><div class="token-perforation"></div><div class="token-status-row"><span>{service}</span><span class="token-pill">SUBMITTED</span></div>""",
+                    f"""<div class="token-eyebrow">YOUR REQUEST ({current_tenant['name']})</div><div class="token-number">{lead_id}</div><div class="token-perforation"></div><div class="token-status-row"><span>{service}</span><span class="token-pill">SUBMITTED</span></div>""",
                     unsafe_allow_html=True,
                 )
 
                 with st.expander("View request details"):
-                    details = find_lead_by_mobile(request.get("mobile"))
+                    details = find_lead_by_mobile(request.get("mobile"), organization_id=current_tenant["id"])
                     if details:
                         for field_key, field_value in details.items():
                             st.markdown(f"**{field_key}:** {field_value}")
@@ -478,7 +623,7 @@ def render_hero():
 
             else:
                 st.markdown(
-                    """<div class="token-eyebrow">FIND YOUR REQUEST</div><div class="token-number">Track an existing request</div><div class="token-perforation"></div>""",
+                    f"""<div class="token-eyebrow">FIND YOUR REQUEST ({current_tenant['name']})</div><div class="token-number">Track an existing request</div><div class="token-perforation"></div>""",
                     unsafe_allow_html=True,
                 )
 
@@ -499,7 +644,7 @@ def render_hero():
                             unsafe_allow_html=True,
                         )
                     else:
-                        found = find_lead_by_mobile(mobile_clean)
+                        found = find_lead_by_mobile(mobile_clean, organization_id=current_tenant["id"])
 
                         if found:
                             save_request(
@@ -510,7 +655,7 @@ def render_hero():
                             st.rerun()
                         else:
                             st.markdown(
-                                '<div class="field-hint warning">⚠ No request found for that number</div>',
+                                f'<div class="field-hint warning">⚠ No request found for that number under {current_tenant["name"]}</div>',
                                 unsafe_allow_html=True,
                             )
 
@@ -545,8 +690,21 @@ def render_service_cards():
 
 
 def render_home():
+    current_tenant = get_current_tenant()
     render_hero()
     render_service_cards()
+    with st.expander(f"📊 Export {current_tenant['name']} Leads to Excel (Admin / Reports)"):
+        try:
+            excel_data = get_excel_export_bytes(organization_id=current_tenant["id"])
+            st.download_button(
+                label=f"📥 Download {current_tenant['name']} Leads (.xlsx)",
+                data=excel_data,
+                file_name=f"{current_tenant['slug']}_leads.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        except Exception as exc:
+            st.caption(f"Export currently unavailable: {exc}")
     st.markdown(
         '<div class="footer-note">No spam calls. Just genuine requests, routed straight to your inbox.</div>',
         unsafe_allow_html=True,
@@ -564,6 +722,12 @@ def main():
     inject_css()
     render_brand_bar()
     float_init()
+
+    # Protected application functionality requires authentication
+    if not is_authenticated():
+        render_auth_screen()
+        return
+
     if "chat_open" not in st.session_state:
         st.session_state.chat_open = False
 

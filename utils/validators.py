@@ -1,15 +1,17 @@
 import re
 
-EMAIL_PATTERN = r"^[\w\.\+\-]+@[\w\-]+\.[a-zA-Z]{2,}$"
+EMAIL_PATTERN = r"^[\w\.\+\-]+@[a-zA-Z0-9\.\-]+\.[a-zA-Z]{2,}$"
 
 
 def validate_name(name):
-    if not name or not name.strip():
+    if not name or not str(name).strip():
         return False, "Name is required."
     return True, ""
 
 
 def validate_mobile(mobile):
+    if mobile is None:
+        return False, "Mobile number is required."
     mobile = str(mobile).strip()
     if not mobile:
         return False, "Mobile number is required."
@@ -21,7 +23,9 @@ def validate_mobile(mobile):
 
 
 def validate_email(email):
-    email = email.strip()
+    if not email:
+        return False, "Email is required."
+    email = str(email).strip()
     if not email:
         return False, "Email is required."
     if not re.match(EMAIL_PATTERN, email):
@@ -30,7 +34,7 @@ def validate_email(email):
 
 
 def validate_city(city):
-    if not city or not city.strip():
+    if not city or not str(city).strip():
         return False, "City is required."
     return True, ""
 
@@ -45,10 +49,10 @@ def validate_budget(budget):
     return True, ""
 
 def validate_pincode(pincode):
-    pincode = str(pincode).strip()
-
-    if not pincode:
+    if pincode is None or str(pincode).strip() == "":
         return True, ""      # Optional field
+
+    pincode = str(pincode).strip()
 
     if not pincode.isdigit():
         return False, "Pincode must contain digits only."

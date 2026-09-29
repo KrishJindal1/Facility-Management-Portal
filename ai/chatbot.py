@@ -1,6 +1,6 @@
 from ai.knowledge import load_knowledge
 from ai.prompts import CHATBOT_SYSTEM_PROMPT
-from ai.ollama_client import ask_ai
+from ai.providers import get_ai_provider
 
 
 GREETINGS = {
@@ -13,9 +13,10 @@ GREETINGS = {
 }
 
 
-def ask_chatbot(question: str):
-
-    question = question.strip()
+def ask_chatbot(question: str) -> str:
+    question = (question or "").strip()
+    if not question:
+        return "Please ask a question about HomeDesk facility services."
 
     # Handle greetings without calling the AI
     if question.lower() in GREETINGS:
@@ -33,18 +34,11 @@ def ask_chatbot(question: str):
             "How can I help you today?"
         )
 
-    knowledge = load_knowledge()
+    try:
+        knowledge = load_knowledge()
+    except Exception:
+        knowledge = "HomeDesk provides verified cook, driver, and security guard services."
 
-    prompt = f"""
-{CHATBOT_SYSTEM_PROMPT}
-
-Knowledge Base
-
-{knowledge}
-
-User Question
-
-{question}
-"""
-
-    return ask_ai(prompt)
+    system_instruction = f"{CHATBOT_SYSTEM_PROMPT}\n\nKnowledge Base:\n{knowledge}"
+    provider = get_ai_provider()
+    return provider.ask(prompt=question, system_prompt=system_instruction)
