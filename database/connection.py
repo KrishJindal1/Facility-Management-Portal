@@ -11,10 +11,14 @@ from config import DATABASE_URL
 logger = logging.getLogger(__name__)
 
 
+from urllib.parse import quote_plus, unquote
+
+
 def _normalize_database_url(url: str) -> str:
     """
     Normalizes PostgreSQL URL schemes for SQLAlchemy compatibility.
     Strips accidental surrounding quotes, whitespace, and variable name prefixes.
+    Automatically encodes special characters in passwords if unencoded.
     Replaces deprecated 'postgres://' or bare 'postgresql://' with psycopg2 driver scheme.
     """
     if not url:
@@ -29,6 +33,19 @@ def _normalize_database_url(url: str) -> str:
         if (url.startswith('"') and url.endswith('"')) or (url.startswith("'") and url.endswith("'")):
             url = url[1:-1].strip()
 
+    if not url:
+        return ""
+
+    # Auto-encode special characters in password if raw special chars are present
+    if "://" in url and "@" in url:
+        scheme, rest = url.split("://", 1)
+        creds, host_and_path = rest.rsplit("@", 1)
+        if ":" in creds:
+            username, password = creds.split(":", 1)
+            # unquote first in case partially encoded, then quote_plus
+            clean_pwd = quote_plus(unquote(password))
+            url = f"{scheme}://{username}:{clean_pwd}@{host_and_path}"
+
     if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql+psycopg2://", 1)
     if url.startswith("postgresql://") and not url.startswith("postgresql+"):
@@ -37,6 +54,12 @@ def _normalize_database_url(url: str) -> str:
 
 
 NORMALIZED_DATABASE_URL = _normalize_database_url(DATABASE_URL)
+
+# Fallback to local SQLite if DATABASE_URL is empty or missing
+if not NORMALIZED_DATABASE_URL:
+    from config import BASE_DIR
+    NORMALIZED_DATABASE_URL = f"sqlite:///{(BASE_DIR / 'data' / 'facility_management.db').resolve()}"
+    logger.warning("DATABASE_URL is empty or invalid. Falling back to local database: %s", NORMALIZED_DATABASE_URL)
 
 # Configure engine arguments based on database backend
 engine_kwargs = {"pool_pre_ping": True}
@@ -51,7 +74,7 @@ else:
 try:
     engine = create_engine(NORMALIZED_DATABASE_URL, **engine_kwargs)
 except Exception as exc:
-    logger.error("Failed to initialize database engine: %s", exc)
+    logger.error("Failed to initialize database engine for URL: %s", exc)
     raise
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

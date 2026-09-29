@@ -15,9 +15,7 @@ services:
       - key: APP_ENV
         value: production
       - key: DATABASE_URL
-        fromDatabase:
-          name: homedesk-db
-          property: connectionString
+        sync: false
       - key: AI_PROVIDER
         value: openai
       - key: AI_API_KEY
@@ -26,10 +24,3 @@ services:
         value: gpt-4o-mini
       - key: AI_API_BASE_URL
         value: https://api.openai.com/v1
-
-databases:
-  - name: homedesk-db
-    databaseName: facility_management
-    user: homedesk_admin
-    plan: free
-    region: oregon
