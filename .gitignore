@@ -33,3 +33,7 @@ dist/
 *.egg-info/
 
 storage/__pycache__/
+
+node_modules/
+frontend/node_modules/
+frontend/dist/

@@ -2,6 +2,7 @@
 Factory module for instantiating and caching AI providers.
 Resolves providers based on AI_PROVIDER environment setting.
 """
+import os
 from typing import Optional, Dict
 import logging
 from ai.providers.base import BaseAIProvider
@@ -25,7 +26,7 @@ def get_ai_provider(provider_name: Optional[str] = None) -> BaseAIProvider:
     - "ollama": Local Ollama service
     - "mock": Mock provider for automated testing
     """
-    target = (provider_name or AI_PROVIDER or "openai").lower().strip()
+    target = (provider_name or os.getenv("AI_PROVIDER") or AI_PROVIDER or "openai").lower().strip()
 
     if target in _PROVIDER_CACHE:
         return _PROVIDER_CACHE[target]

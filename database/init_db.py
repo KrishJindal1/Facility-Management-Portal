@@ -1,14 +1,20 @@
 """
 Database initialization and data migration CLI utility.
-Creates all database tables, seeds multi-tenant organizations, and migrates existing Excel records.
+Creates all database tables, seeds categories, organizations, and migrates existing Excel records.
 """
 from pathlib import Path
+import sys
 import logging
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from openpyxl import load_workbook
 from config import EXCEL_FILE
 from database.connection import check_connection, get_db
-from database.models import Organization
-from database.repository import init_database, save_lead_to_db
+from database.models import Requirement, Category
+from database.repository import init_database, save_requirement_to_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -16,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 def migrate_from_excel_if_needed():
     """
-    Imports historical records from data/requirements.xlsx into the database
-    under the default tenant (homedesk) if the database is newly initialized.
+    Imports historical records from data/requirements.xlsx into PostgreSQL
+    under their respective categories if the database is newly initialized.
     """
     if not Path(EXCEL_FILE).exists():
         logger.info("No existing Excel file found at %s. Skipping migration.", EXCEL_FILE)
@@ -28,12 +34,6 @@ def migrate_from_excel_if_needed():
     except Exception as exc:
         logger.warning("Could not read Excel file for migration: %s", exc)
         return
-
-    homedesk_id = 1
-    with get_db() as db:
-        org = db.query(Organization).filter_by(slug="homedesk").first()
-        if org:
-            homedesk_id = org.id
 
     migrated_count = 0
 
@@ -57,16 +57,22 @@ def migrate_from_excel_if_needed():
                 continue
 
             try:
-                save_lead_to_db(sheet_name, row_dict, organization_id=homedesk_id)
+                # Check if already migrated
+                with get_db() as db:
+                    existing = db.query(Requirement).filter_by(lead_id=str(lead_id).strip()).first()
+                    if existing:
+                        continue
+
+                save_requirement_to_db(sheet_name, row_dict)
                 migrated_count += 1
             except Exception as exc:
                 logger.warning("Failed migrating row %s from sheet %s: %s", lead_id, sheet_name, exc)
 
-    logger.info("Excel migration completed. Migrated %d historical lead(s) for tenant %s.", migrated_count, homedesk_id)
+    logger.info("Excel migration completed. Migrated %d historical requirement(s) to PostgreSQL.", migrated_count)
 
 
 def main():
-    logger.info("Starting multi-tenant database initialization...")
+    logger.info("Starting PostgreSQL database initialization...")
     is_healthy, msg = check_connection()
     if not is_healthy:
         logger.error("Database connection failed: %s", msg)
@@ -76,7 +82,7 @@ def main():
     if success:
         logger.info("Database schema tables created successfully.")
         migrate_from_excel_if_needed()
-        logger.info("Multi-tenant database setup completed successfully.")
+        logger.info("Database setup completed successfully.")
         return True
     else:
         logger.error("Failed to initialize database schema.")
@@ -84,4 +90,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if not main():
+        sys.exit(1)
+

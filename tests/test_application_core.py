@@ -158,7 +158,7 @@ class TestApplicationCore(unittest.TestCase):
         lead_id = saved["Lead ID"]
 
         with get_db() as db:
-            lead = db.query(Lead).filter_by(organization_id=self.org1_id, lead_id=lead_id).first()
+            lead = db.query(Lead).filter_by(lead_id=lead_id).first()
             self.assertIsNotNone(lead)
             self.assertEqual(lead.service_type, "Cook")
             self.assertIsNotNone(lead.cook_requirement)
@@ -179,7 +179,7 @@ class TestApplicationCore(unittest.TestCase):
         lead_id = saved["Lead ID"]
 
         with get_db() as db:
-            lead = db.query(Lead).filter_by(organization_id=self.org1_id, lead_id=lead_id).first()
+            lead = db.query(Lead).filter_by(lead_id=lead_id).first()
             self.assertIsNotNone(lead)
             self.assertEqual(lead.service_type, "Driver")
             self.assertIsNotNone(lead.driver_requirement)
@@ -200,7 +200,7 @@ class TestApplicationCore(unittest.TestCase):
         lead_id = saved["Lead ID"]
 
         with get_db() as db:
-            lead = db.query(Lead).filter_by(organization_id=self.org1_id, lead_id=lead_id).first()
+            lead = db.query(Lead).filter_by(lead_id=lead_id).first()
             self.assertIsNotNone(lead)
             self.assertEqual(lead.service_type, "Security Guard")
             self.assertIsNotNone(lead.security_guard_requirement)
@@ -217,13 +217,13 @@ class TestApplicationCore(unittest.TestCase):
         lead_id = saved["Lead ID"]
 
         with get_db() as db:
-            lead = db.query(Lead).filter_by(organization_id=self.org1_id, lead_id=lead_id).first()
+            lead = db.query(Lead).filter_by(lead_id=lead_id).first()
             self.assertEqual(lead.status, "New")
             lead.status = "In Progress"
             db.flush()
 
         with get_db() as db:
-            updated = db.query(Lead).filter_by(organization_id=self.org1_id, lead_id=lead_id).first()
+            updated = db.query(Lead).filter_by(lead_id=lead_id).first()
             self.assertEqual(updated.status, "In Progress")
 
     def test_13_database_rollback_on_integrity_violation(self):
@@ -235,17 +235,19 @@ class TestApplicationCore(unittest.TestCase):
     # 5. Lead Lookup Tests
     # ---------------------------------------------------------
     def test_14_lead_lookup_by_mobile(self):
-        """Verifies looking up submitted leads by mobile number within tenant."""
-        mobile = "9820055667"
+        """Verifies looking up submitted leads by mobile number within tenant category."""
+        mobile = "9820055999"
+        with get_db() as db:
+            db.query(Lead).filter_by(mobile=mobile).delete()
         payload = {"Name": "Lookup Client", "Mobile": mobile, "City": "Noida", "Budget": 16000}
-        save_lead_to_db("Driver", payload, organization_id=self.org1_id)
+        save_lead_to_db("Cook", payload, organization_id=self.org1_id)
 
-        # Lookup in Org 1 succeeds
+        # Lookup in Org 1 (Cook Org) succeeds
         res = find_lead_by_mobile(mobile, organization_id=self.org1_id)
         self.assertIsNotNone(res)
         self.assertEqual(res["Name"], "Lookup Client")
 
-        # Lookup in Org 2 for same mobile returns None (Tenant Isolation)
+        # Lookup in Org 2 (Driver Org) for Cook requirement returns None (Category Isolation)
         res_org2 = find_lead_by_mobile(mobile, organization_id=self.org2_id)
         self.assertIsNone(res_org2)
 

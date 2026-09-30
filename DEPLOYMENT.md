@@ -1,197 +1,201 @@
-# HomeDesk Facility Management Portal — Production CI/CD & Deployment Guide (Render)
+# Continuous Integration & Continuous Deployment (CI/CD) Architecture
+## HomeDesk Facility Management Platform
 
-This document describes the complete Continuous Integration and Continuous Deployment (CI/CD) architecture connecting **GitHub**, **GitHub Actions**, and **Render Cloud Platform**.
+This document describes the end-to-end CI/CD architecture, automated testing pipeline, zero-downtime deployment triggers, secret management, and rollback recovery procedures for the HomeDesk Facility Management Platform hosted on Render.
 
 ---
 
-## 1. End-to-End CI/CD Architecture Flow
+## 1. End-to-End Workflow Architecture
 
 ```
-                      +---------------------------------------+
-                      |         Developer Workstation         |
-                      |  1. Feature branch (git commit/push)  |
-                      |  2. Open Pull Request to 'main'       |
-                      +---------------------------------------+
-                                          |
-                                          v
-                      +---------------------------------------+
-                      |            GitHub Actions CI          |
-                      |  - Matrix: Python 3.11                |
-                      |  - Service: PostgreSQL 15 Container   |
-                      |  - Zero-secret mock AI testing        |
-                      |  - 44 Unit & Integration Tests        |
-                      +---------------------------------------+
-                                          |
-                      +-------------------+-------------------+
-                      |                                       |
-           [CI Fails: Exit 1]                      [CI Passes: Exit 0]
-                      |                                       |
-                      v                                       v
-         PR Blocked / Red X in UI                 PR Approved & Merged
-         No Deployment to Render                              |
-                                                              v
-                                          +---------------------------------------+
-                                          |         GitHub Actions CD Job         |
-                                          |  - Triggered ONLY on push to 'main'   |
-                                          |  - Authenticates via Deploy Hook URL  |
-                                          |  - Fires Render Deploy Webhook        |
-                                          |  - Polls /_stcore/health endpoint     |
-                                          +---------------------------------------+
-                                                              |
-                                                              v
-                                          +---------------------------------------+
-                                          |         Render Cloud Platform         |
-                                          |  - Auto-Deploy: false (gated by CI)   |
-                                          |  - Build: pip install requirements    |
-                                          |  - Start: streamlit run app.py        |
-                                          |  - Database: Render PostgreSQL        |
-                                          |  - Production AI: OpenAI / Gemini     |
-                                          +---------------------------------------+
+Developer
+    │
+    ▼
+GitHub Feature Branch
+    │
+    ▼
+Pull Request (PR to `main`)
+    │
+    ▼
+GitHub Actions CI Pipeline (PostgreSQL 15 Container Service)
+    │
+    ├─► Run Full Automated Test Suite (115 tests)
+    │
+    ├─── [CI FAIL] ──► Block PR Merge & Prevent Production Deploy
+    │
+    └─── [CI PASS] ──► PR Approved & Merged to `main`
+                            │
+                            ▼
+              GitHub Actions CD Job (on push to `main`)
+                            │
+                            ▼
+              Trigger Render Deploy Hook (POST)
+                            │
+                            ▼
+              Render Web Service Build & Deploy
+                            │
+                            ▼
+              Health Check Probe (/_stcore/health)
+                            │
+                            ▼
+                     Production LIVE
 ```
 
 ---
 
-## 2. CI/CD Workflow Breakdown
+## 2. CI Pipeline Specifications (`.github/workflows/ci.yml`)
 
-### CI Workflow (`test` Job)
-The CI pipeline is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and executes on:
-- **Pull Requests targeting `main`**
-- **Pushes to `main`**
+The CI workflow is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
-**Execution Steps**:
-1. **Runner**: Spin up clean `ubuntu-latest` virtual machine.
-2. **Service Container**: Spin up isolated `postgres:15-alpine` container with automatic `pg_isready` healthcheck on port `5432`.
-3. **Environment Isolation**: Set `AI_PROVIDER: mock` and ephemeral PostgreSQL test container credentials (`postgrespassword`). No production secrets required.
-4. **Python Setup**: Provision Python `3.11` as specified in `.python-version` with automated pip caching.
-5. **Dependency Installation**: Upgrade pip and install all locked packages from `requirements.txt`.
-6. **Schema Initialization**: Execute `python -m database.init_db` against the PostgreSQL service container to generate schema tables and seed tenant test fixtures.
-7. **Test Discovery & Execution**: Execute `python -m unittest discover -s tests -p "test_*.py" -v` across all 44 unit and integration tests.
+### Workflow Triggers
+* **Pull Requests**: Any PR targeting the `main` branch triggers the full test suite.
+* **Pushes to `main`**: Merges or direct pushes to `main` run the test suite and, upon success, trigger the gated CD deployment job.
+* **Manual Dispatch**: Can be triggered manually via GitHub Actions UI (`workflow_dispatch`).
 
-### CD Workflow (`deploy` Job)
-The deployment job runs **strictly** under the following conditions:
-- Event is a `push` (or merged PR) directly onto `main`.
-- The upstream `test` job completed with exit code `0` (`needs: test`).
-
-**Execution Steps**:
-1. **Render Deployment Trigger**:
-   - Reads `RENDER_DEPLOY_HOOK_URL` from GitHub Repository Secrets.
-   - Dispatches an authenticated `POST` request to Render's Deploy Hook endpoint.
-   - Render pulls the validated commit SHA and starts a zero-downtime deployment.
-2. **Post-Deploy Health Verification**:
-   - Reads `RENDER_SERVICE_URL` from GitHub Repository Secrets (e.g. `https://homedesk-facility-portal.onrender.com`).
-   - Polls the native Streamlit health endpoint (`/_stcore/health`) every 10 seconds for up to 5 minutes.
-   - Confirms HTTP 200 status before marking the deployment workflow as green.
+### CI Test Environment & Isolation
+* **Service Container**: GitHub Actions provisions an isolated `postgres:15-alpine` container on port `5432` with healthcheck verification (`pg_isready`).
+* **Python Runtime**: Python version `3.11` (matched to production via `.python-version`).
+* **Dependency Installation**: Upgrades `pip` and installs locked packages from `requirements.txt`.
+* **Zero Production Secret Dependency**:
+  - `DATABASE_URL`: `postgresql://postgres:testpassword@localhost:5432/facility_management_test`
+  - `APP_ENV`: `test`
+  - `AI_PROVIDER`: `mock` (ensures zero external API dependency and zero cost/quota consumption during automated testing)
+* **Database Initialization**: Runs `python -m database.init_db` to establish all tables, constraints, foreign keys, and seed organizations.
+* **Automated Test Suite**: Executes all 115 unit and integration tests across 12 test modules (`python -m unittest discover -s tests -p "test_*.py" -v`).
+* **Gating**: If any test fails, the job immediately terminates with a non-zero exit code.
 
 ---
 
-## 3. Configuration & Secrets Management
+## 3. CD Pipeline & Gated Render Deployment
 
-Secrets and configuration are strictly segregated between **GitHub Actions** (deployment orchestration) and **Render** (runtime execution).
+### Deployment Prevention on Failed CI
+Render's native Auto-Deploy is disabled (`autoDeploy: false` in [`render.yaml`](render.yaml)). Render does **not** listen directly to git push events to deploy automatically.
 
-### A. GitHub Repository Secrets
-Navigate to: **GitHub Repo** &rarr; **Settings** &rarr; **Secrets and variables** &rarr; **Actions** &rarr; **New repository secret**:
-
-| Secret Name | Required? | Purpose | Example Value |
-|---|---|---|---|
-| `RENDER_DEPLOY_HOOK_URL` | **Yes** (for CD) | Webhook to trigger Render deployment after CI succeeds | `https://api.render.com/deploy/srv-abc123xyz?key=secrettoken` |
-| `RENDER_SERVICE_URL` | Optional | URL of the live Render app used for post-deployment health verification | `https://homedesk-facility-portal.onrender.com` |
-
-> **Note:** The CI test suite does **not** require any production secrets. It runs completely hermetic with `AI_PROVIDER=mock` and an ephemeral containerized PostgreSQL instance.
-
-### B. Render Production Environment Variables
-Navigate to: **Render Dashboard** &rarr; **Web Service** &rarr; **Environment**:
-
-| Variable Name | Required? | Purpose | Example Value |
-|---|---|---|---|
-| `PYTHON_VERSION` | Yes | Specifies Python runtime version | `3.11.9` |
-| `APP_ENV` | Yes | Enables production mode | `production` |
-| `DATABASE_URL` | Yes | Internal PostgreSQL connection string | `postgres://homedesk_admin:***@dpg-***-a/facility_management` |
-| `AI_PROVIDER` | Yes | Active AI engine | `openai` (or `gemini`) |
-| `AI_API_KEY` | Yes | Production API key for cloud AI | `sk-proj-************************` |
-| `AI_MODEL` | Yes | LLM model identifier | `gpt-4o-mini` |
-| `AI_API_BASE_URL` | Optional | Custom endpoint (e.g. for Groq) | `https://api.openai.com/v1` |
-
-> **Security Guarantee:** Render secrets and keys are never stored in git or exposed in CI logs.
+Instead, deployment is gated behind GitHub Actions:
+1. The `deploy` job explicitly declares `needs: test`.
+2. The `deploy` job only runs on `refs/heads/main` pushes (`if: github.ref == 'refs/heads/main' && ...`).
+3. If the `test` job fails:
+   - The `deploy` job is skipped or cancelled.
+   - Render never receives a deployment signal.
+   - Production remains completely unaffected on the previous stable release.
+4. When `test` passes:
+   - The `deploy` job sends an authenticated POST request to Render's Deploy Hook URL.
+   - Render initiates a clean build and zero-downtime blue/green deployment.
+   - The CD job optionally polls Render's native health probe (`/_stcore/health`) to confirm the new revision is healthy before completing.
 
 ---
 
-## 4. How a Developer Safely Releases a Change
+## 4. Secret & Environment Variable Management
 
-Follow this workflow to release updates safely to production:
+**Guiding Rule**: No credentials, tokens, connection strings, or sensitive API keys are ever stored in the git repository.
 
-### Step 1: Work in a Feature Branch
-```bash
-git checkout -b feature/improved-lead-routing
-# Make your code edits...
-```
+### A. GitHub Secrets (CI/CD Pipeline)
+Configured under **GitHub Repository** &rarr; **Settings** &rarr; **Secrets and variables** &rarr; **Actions**:
 
-### Step 2: Validate Locally Before Pushing
-Run the automated test suite locally:
-```bash
-python -m unittest discover tests -v
-```
-Run the system health check:
-```bash
-python healthcheck.py
-```
+| Secret Name | Required? | Description |
+| :--- | :---: | :--- |
+| `RENDER_DEPLOY_HOOK_URL` | **Yes** (for CD) | Webhook URL generated by Render Web Service (e.g., `https://api.render.com/deploy/srv-cxxxxxxx?key=yyyyyyy`). Used by GitHub Actions to trigger deployment after CI passes. |
+| `RENDER_SERVICE_URL` | Optional | Public URL of the deployed Render service (e.g., `https://homedesk-facility-portal.onrender.com`). Used by CD to poll the health endpoint post-deploy. |
 
-### Step 3: Push and Open a Pull Request
-```bash
-git push -u origin feature/improved-lead-routing
-```
-Open a Pull Request on GitHub targeting the `main` branch.
+*Note: If `RENDER_DEPLOY_HOOK_URL` is omitted, the CI suite still validates PRs and pushes, logging a polite notification that deployment was skipped.*
 
-### Step 4: GitHub Actions Validates the PR
-- GitHub Actions automatically runs the `test` job.
-- The `deploy` job is **automatically skipped** on pull requests.
-- Branch protection rules prevent merging until all CI checks pass.
+### B. Render Environment Variables (Production Runtime)
+Configured in the **Render Dashboard** &rarr; **Web Service** &rarr; **Environment**:
 
-### Step 5: Merge Pull Request
-Once approved and CI passes, merge the PR into `main`.
-
-### Step 6: Automated Production Deployment
-1. GitHub Actions detects the push to `main` and runs the `test` job.
-2. Upon test success, GitHub Actions executes the `deploy` job.
-3. Render receives the deploy webhook, builds the application, and transitions traffic with zero downtime.
-4. GitHub Actions verifies that `https://<service-url>/_stcore/health` responds with HTTP 200 OK.
+| Variable Name | Required? | Example Value | Description |
+| :--- | :---: | :--- | :--- |
+| `PORT` | **Injected** | `10000` | Automatically injected by Render; bound via `$PORT`. |
+| `PYTHON_VERSION` | **Yes** | `3.11.9` | Sets the Python runtime version. |
+| `APP_ENV` | **Yes** | `production` | Production environment flag. |
+| `DATABASE_URL` | **Yes** | `postgresql://user:pass@host:5432/dbname` | Managed PostgreSQL database connection string. |
+| `AI_PROVIDER` | **Yes** | `openai` | Active cloud AI provider (`openai`, `gemini`, `groq`, or `mock`). |
+| `AI_API_KEY` | **Yes** | `sk-...` | Cloud AI API key. |
+| `AI_MODEL` | No | `gpt-4o-mini` | AI model name (default: `gpt-4o-mini`). |
+| `AI_API_BASE_URL` | No | `https://api.openai.com/v1` | Custom endpoint base URL. |
+| `SECRET_KEY` | Optional | *generated random string* | Session signing key. |
 
 ---
 
-## 5. Failure Handling & Resilience
+## 5. Production Specifications
 
-### What Happens When CI Fails?
-- If any unit test, database query, or lint check fails during the `test` job:
-  1. The GitHub Actions job immediately terminates with an error code.
-  2. The Pull Request displays a prominent **Red X**, blocking merging.
-  3. The downstream `deploy` job **does not run**.
-  4. Render is **never notified** of the faulty commit.
-  5. The live production service continues running the previous healthy deployment without disruption.
-
-### What Happens When Render Deployment Fails?
-- If the build fails on Render (e.g., dependency installation failure or compilation error):
-  1. Render cancels the rollout.
-  2. Render keeps the previous successful container version running (zero downtime).
-  3. The GitHub Actions post-deploy health check detects that the new deployment did not become healthy and flags the pipeline with an error.
-  4. Detailed diagnostics can be inspected directly in the Render Web Service deployment log or via `python healthcheck.py`.
+| Specification | Setting | Description |
+| :--- | :--- | :--- |
+| **Service Type** | Web Service | Python Linux Container |
+| **Region** | Oregon (US West) | Co-located with managed PostgreSQL |
+| **Branch** | `main` | Production deployment branch |
+| **Build Command** | `pip install --upgrade pip && pip install -r requirements.txt` | Dependency synchronization |
+| **Start Command** | `streamlit run app.py --server.address=0.0.0.0 --server.port=$PORT` | Production Streamlit entrypoint |
+| **Health Check Path** | `/_stcore/health` | Native Streamlit readiness probe |
+| **Auto-Deploy** | `No` (`autoDeploy: false`) | Gated via GitHub Actions CD |
 
 ---
 
-## 6. Render Service Setup Reference
+## 6. Release Process
 
-### Web Service Configuration
-- **Repository**: `https://github.com/KrishJindal1/Facility-Management-Portal`
-- **Branch**: `main`
-- **Runtime**: `Python`
-- **Auto-Deploy**: `No` (*Gated via GitHub Actions Deploy Hook*)
-- **Build Command**:
-  ```bash
-  pip install --upgrade pip && pip install -r requirements.txt
-  ```
-- **Start Command**:
-  ```bash
-  streamlit run app.py --server.address=0.0.0.0 --server.port=$PORT
-  ```
-- **Health Check Path**:
-  ```
-  /_stcore/health
-  ```
+### Standard Developer Workflow:
+1. **Create a Feature Branch**:
+   ```bash
+   git checkout -b feat/my-improvement
+   ```
+2. **Develop & Verify Locally**:
+   ```bash
+   source .venv/bin/activate
+   python -m unittest discover -s tests -p "test_*.py" -v
+   ```
+3. **Commit & Push to Remote**:
+   ```bash
+   git add .
+   git commit -m "feat: implement improvement"
+   git push origin feat/my-improvement
+   ```
+4. **Open a Pull Request on GitHub**:
+   - Target `main` from `feat/my-improvement`.
+   - GitHub Actions automatically starts the `Build & Test Suite` job.
+5. **CI Gating & Merge**:
+   - Inspect the GitHub Actions check. Ensure all 115 tests pass.
+   - Once CI is green, merge the Pull Request into `main`.
+6. **Automated CD to Production**:
+   - The push to `main` triggers GitHub Actions CI/CD.
+   - The `test` job passes &rarr; `deploy` job executes &rarr; Render Deploy Hook is invoked.
+   - Render pulls the latest `main` commit, builds dependencies, starts the service, and verifies health check.
+
+---
+
+## 7. Rollback & Recovery Process
+
+In the unlikely event of an issue slipping past CI or an external cloud infrastructure degradation, follow these recovery procedures:
+
+### Option A: Instant Render Dashboard Rollback (Zero Git Action, < 30 Seconds)
+1. Open the [Render Dashboard](https://dashboard.render.com).
+2. Navigate to your **homedesk-facility-portal** Web Service.
+3. Click on the **Deploys** tab.
+4. Locate the previous known-good deployment (marked with green checkmark).
+5. Click the three dots (`...`) on that deploy and select **Rollback to this deploy**.
+6. Render immediately switches traffic back to the previous deployment container.
+
+### Option B: Git Revert via Gated CI/CD Pipeline
+1. In your local terminal on `main`:
+   ```bash
+   git revert HEAD -m "revert: rollback recent change"
+   git push origin main
+   ```
+2. The revert triggers the CI pipeline.
+3. Once CI verifies the reverted codebase is healthy, the CD job automatically notifies Render to build and deploy the reverted release.
+
+### Option C: Database Recovery
+- Render Managed PostgreSQL provides automated point-in-time backups.
+- In the Render Dashboard under **PostgreSQL Database** &rarr; **Backups**, choose a snapshot and click **Restore to New Database**, then update `DATABASE_URL` in the Web Service environment settings.
+
+---
+
+## 8. GitHub Branch Protection Policy (Recommended)
+
+To guarantee that no developer can accidentally bypass CI or push broken code directly to `main`:
+1. In the GitHub repository, navigate to **Settings** &rarr; **Branches**.
+2. Click **Add branch protection rule** for branch pattern `main`.
+3. Enable:
+   - **Require a pull request before merging**
+   - **Require status checks to pass before merging**
+     - Select `Build & Test Suite` as a required status check.
+   - **Require branches to be up to date before merging**
+   - **Do not allow bypassing the above settings**

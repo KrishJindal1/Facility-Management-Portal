@@ -7,7 +7,6 @@ from forms.Security_Gaurd_Requirement import render_security_guard_form
 from component.chatbot_widget import render_chatbot
 from utils.local_storage import get_request, save_request, delete_request
 from services.lead_lookup import find_lead_by_mobile
-from services.tenant_service import get_all_tenants, get_current_tenant, set_current_tenant
 from services.auth_service import (
     authenticate_user,
     register_user,
@@ -15,6 +14,20 @@ from services.auth_service import (
     get_current_user,
     login_session,
     logout_session,
+    is_normal_user,
+    is_organization_user,
+    is_admin_user,
+)
+from database.repository import (
+    get_controlled_categories,
+    get_requirements_for_organization,
+    get_user_requirements,
+    get_all_organizations_with_categories,
+    get_all_requirements_for_admin,
+    update_requirement_status,
+    VALID_REQUIREMENT_STATUSES,
+    mask_contact_info,
+    CATEGORY_NAME_TO_SERVICE,
 )
 
 st.set_page_config(
@@ -449,15 +462,21 @@ div[data-testid="stChatInput"] button:hover{
 def render_brand_bar():
     authenticated = is_authenticated()
     user = get_current_user()
-    current_tenant = get_current_tenant()
 
-    col_brand, col_auth = st.columns([1.5, 1.5])
+    col_brand, col_auth = st.columns([1.4, 1.6])
     with col_brand:
+        if is_organization_user() and user:
+            tagline = f"Organization Portal &middot; <b>{user['organization_name']}</b>"
+        elif is_admin_user() and user:
+            tagline = "Platform Administration Portal"
+        else:
+            tagline = "Facility Services &middot; <b>Hire Trusted Help</b>"
+
         st.markdown(
             f"""
             <div class="brand-bar" style="margin-bottom: 0.4rem; padding-bottom: 0.4rem; border-bottom: none;">
                 <div class="brand">Home<span>Desk</span></div>
-                <div class="tagline">Facility Portal &middot; <b>{current_tenant['name']}</b></div>
+                <div class="tagline">{tagline}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -465,44 +484,73 @@ def render_brand_bar():
 
     with col_auth:
         if authenticated and user:
-            col_user, col_logout = st.columns([2.2, 0.8])
-            with col_user:
+            role = user.get("role", "user")
+            col_info, col_btn1, col_logout = st.columns([1.6, 1.0, 0.8])
+            with col_info:
+                if role == "organization":
+                    badge_text = f"ORG: {user.get('category_name', 'SERVICE')}"
+                    sub_text = f"🏢 {user.get('organization_name', 'Org')} (Locked)"
+                elif role == "admin":
+                    badge_text = "PLATFORM ADMIN"
+                    sub_text = "🛡️ Global Management"
+                else:
+                    badge_text = "NORMAL USER"
+                    sub_text = "👤 Customer"
+
                 st.markdown(
                     f"""
-                    <div style="text-align: right; padding-top: 0.4rem; font-size: 0.82rem; color: var(--ink);">
+                    <div style="text-align: right; padding-top: 0.3rem; font-size: 0.82rem; color: var(--ink);">
                         <span>👤 <b>{user['name']}</b></span>
-                        <span style="background: rgba(31,122,92,0.12); color: var(--teal); padding: 0.15rem 0.5rem; border-radius: 999px; margin-left: 0.3rem; font-weight: 600; font-size: 0.72rem;">{user.get('role', 'staff').upper()}</span>
-                        <div style="font-size: 0.74rem; color: var(--muted); margin-top: 0.1rem;">🏢 {user['organization_name']} (Locked)</div>
+                        <span style="background: rgba(31,122,92,0.12); color: var(--teal); padding: 0.15rem 0.5rem; border-radius: 999px; margin-left: 0.3rem; font-weight: 600; font-size: 0.70rem;">{badge_text}</span>
+                        <div style="font-size: 0.72rem; color: var(--muted); margin-top: 0.1rem;">{sub_text}</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
+
+            with col_btn1:
+                if role == "user":
+                    if st.button("My Requests", key="nav_my_req_btn", use_container_width=True):
+                        st.session_state.current_view = "my_requests"
+                        st.session_state.selected_service = None
+                        st.rerun()
+                elif role in ("organization", "admin"):
+                    if st.button("Public Site", key="nav_public_site_btn", use_container_width=True):
+                        st.session_state.current_view = "home"
+                        st.session_state.selected_service = None
+                        st.rerun()
+
             with col_logout:
                 if st.button("Sign Out", key="nav_logout_btn", use_container_width=True):
                     logout_session()
                     delete_request()
+                    st.session_state.current_view = "home"
+                    st.session_state.selected_service = None
                     st.rerun()
         else:
-            st.markdown(
-                """
-                <div style="text-align: right; padding-top: 0.8rem; font-size: 0.82rem; color: var(--muted);">
-                    🔒 <i>Authentication Required</i>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            col_spacer, col_login_btn = st.columns([1.5, 1.5])
+            with col_login_btn:
+                if st.session_state.get("current_view") == "auth":
+                    if st.button("← Back to Public Forms", key="nav_back_to_public", use_container_width=True):
+                        st.session_state.current_view = "home"
+                        st.rerun()
+                else:
+                    if st.button("🏢 Sign In / Organization Portal", key="nav_login_entry_btn", use_container_width=True):
+                        st.session_state.current_view = "auth"
+                        st.session_state.selected_service = None
+                        st.rerun()
 
     st.markdown('<div style="border-bottom: 1px solid var(--border); margin-bottom: 1.8rem;"></div>', unsafe_allow_html=True)
 
 
 def render_auth_screen():
-    col1, col2, col3 = st.columns([1, 1.4, 1])
+    col1, col2, col3 = st.columns([1, 1.6, 1])
     with col2:
         st.markdown(
             """
             <div style="text-align: center; margin-bottom: 1.5rem; margin-top: 0.5rem;">
-                <h2 style="font-family: 'Fraunces', serif; color: var(--ink); margin-bottom: 0.3rem;">Facility Management Portal</h2>
-                <p style="color: var(--muted); font-size: 0.9rem;">Sign in to access your organization's requests, service forms, and exports.</p>
+                <h2 style="font-family: 'Fraunces', serif; color: var(--ink); margin-bottom: 0.3rem;">Portal Authentication</h2>
+                <p style="color: var(--muted); font-size: 0.9rem;">Sign in or register as a Normal User or Service Provider Organization.</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -512,75 +560,468 @@ def render_auth_screen():
 
         with tab_login:
             with st.form("login_form"):
-                email = st.text_input("Work Email", placeholder="name@company.com", key="login_email")
+                email = st.text_input("Email Address", placeholder="name@domain.com", key="login_email")
                 password = st.text_input("Password", type="password", placeholder="Enter your password", key="login_pwd")
-                login_submitted = st.form_submit_button("Sign In to Portal", use_container_width=True)
+                login_submitted = st.form_submit_button("Sign In", use_container_width=True)
 
             if login_submitted:
                 success, msg, user_data = authenticate_user(email, password)
                 if success and user_data:
                     login_session(user_data)
+                    st.session_state.current_view = "home"
                     st.success(f"Welcome back, {user_data['name']}! Entering portal...")
                     st.rerun()
                 else:
                     st.error(msg)
 
-            with st.expander("ℹ️ Demo Organization Credentials"):
+            with st.expander("ℹ️ Demo Organization, Admin & User Accounts"):
                 st.markdown(
                     """
-                    **Organization 1 (HomeDesk Primary):**
-                    - Email: `admin@homedesk.com`
-                    - Password: `Password123!`
+                    **Platform Administrator:**
+                    - Email: `admin@homedesk.com` | Password: `Password123!`
 
-                    **Organization 2 (Acme Facilities Group):**
-                    - Email: `admin@acme.com`
-                    - Password: `Password123!`
+                    **Cook Organization (HomeDesk Primary):**
+                    - Email: `cooks@homedesk.com` | Password: `Password123!`
+
+                    **Driver Organization (Acme Facilities):**
+                    - Email: `admin@acme.com` | Password: `Password123!`
+
+                    **Security Guard Organization (IronShield Security):**
+                    - Email: `guards@ironshield.com` | Password: `Password123!`
+
+                    **Normal User (Customer):**
+                    - Email: `user@homedesk.com` | Password: `Password123!`
                     """
                 )
 
         with tab_register:
+            account_type = st.radio(
+                "Account Type",
+                options=["Normal User (Customer / Household)", "Service Provider Organization"],
+                key="reg_account_type",
+                horizontal=True,
+            )
+
             with st.form("register_form"):
                 reg_name = st.text_input("Full Name", placeholder="e.g. Jane Doe", key="reg_name")
-                reg_email = st.text_input("Work Email", placeholder="jane@company.com", key="reg_email")
+                reg_email = st.text_input("Email Address", placeholder="jane@domain.com", key="reg_email")
                 reg_mobile = st.text_input("Mobile Number", placeholder="10-digit number", max_chars=10, key="reg_mobile")
                 reg_pwd = st.text_input("Password (min 8 chars, 1 letter, 1 number)", type="password", key="reg_pwd")
                 reg_confirm = st.text_input("Confirm Password", type="password", key="reg_confirm")
 
-                all_orgs = get_all_tenants()
-                org_options = [o["name"] for o in all_orgs] + ["+ Create New Organization"]
-                selected_org = st.selectbox("Organization", options=org_options, key="reg_org_select")
+                new_org_name = None
+                selected_cat_name = None
 
-                new_org_name = ""
-                selected_org_id = None
-                if selected_org == "+ Create New Organization":
-                    new_org_name = st.text_input("New Organization Name", placeholder="e.g. Zenith Tech Corp", key="reg_new_org")
-                else:
-                    for o in all_orgs:
-                        if o["name"] == selected_org:
-                            selected_org_id = o["id"]
-                            break
+                if account_type == "Service Provider Organization":
+                    st.markdown("---")
+                    st.markdown("##### 🏢 Organization Profile")
+                    new_org_name = st.text_input("Organization Name", placeholder="e.g. Apex Cooks & Chefs", key="reg_org_name")
+                    st.caption("Each organization must register for exactly ONE service category.")
+                    selected_cat_name = st.selectbox(
+                        "Service Category (Controlled)",
+                        options=["Cook", "Driver", "Security Guard"],
+                        key="reg_org_cat",
+                    )
 
                 reg_submitted = st.form_submit_button("Register & Create Account", use_container_width=True)
 
             if reg_submitted:
                 if reg_pwd != reg_confirm:
                     st.error("Passwords do not match. Please re-enter your password.")
+                elif account_type == "Service Provider Organization" and not (new_org_name and new_org_name.strip()):
+                    st.error("Organization Name is required for organization registration.")
                 else:
+                    is_org = (account_type == "Service Provider Organization")
                     success, msg, user_data = register_user(
                         name=reg_name,
                         email=reg_email,
                         mobile=reg_mobile,
                         password=reg_pwd,
-                        organization_id=selected_org_id,
-                        new_org_name=new_org_name,
+                        new_org_name=new_org_name if is_org else None,
+                        category_name=selected_cat_name if is_org else None,
+                        role="organization" if is_org else "user",
                     )
                     if success and user_data:
                         login_session(user_data)
-                        st.success(f"Account registered for {user_data['organization_name']}! Entering portal...")
+                        st.session_state.current_view = "home"
+                        st.success(f"Account registered successfully! Entering portal...")
                         st.rerun()
                     else:
                         st.error(msg)
 
+
+def render_organization_dashboard(user: Dict[str, Any]):
+    """
+    Dedicated dashboard for Organization users (Phase 5).
+    Core business rule: Automatically uses the authenticated organization's registered category.
+    organization.category_id == requirement.category_id
+
+    Requirements:
+    1. Organization name
+    2. Registered service category (locked, non-editable)
+    3. Number of available requirements
+    4. List/table of matching requirements
+    5. Requirement details
+    6. Requirement status
+    7. Relevant actions: Status progression / update & Excel export
+    """
+    if not user or not is_organization_user(user):
+        st.error("⛔ **Access Denied**: Organization authentication required to access this dashboard.")
+        return
+
+    org_id = user.get("organization_id")
+    if not org_id:
+        st.error("⛔ **Access Denied**: No registered organization is linked to this account.")
+        return
+
+    org_name = user.get("organization_name", "Organization")
+    cat_name = user.get("category_name", "UNKNOWN")
+    cat_display = CATEGORY_NAME_TO_SERVICE.get(cat_name, cat_name)
+
+    # 1 & 2. Organization Header Banner with Immutable Category Lock
+    st.markdown(
+        f"""
+        <div style="background: white; border: 1px solid var(--border); border-radius: 16px; padding: 1.6rem; margin-bottom: 1.5rem; box-shadow: 0 10px 30px -15px rgba(22,36,63,0.15);">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.8rem;">
+                <div>
+                    <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 600;">Service Organization Portal</div>
+                    <h2 style="margin: 0.2rem 0; font-family: 'Fraunces', serif; color: var(--ink);">🏢 {org_name}</h2>
+                    <div style="font-size: 0.85rem; color: var(--muted);">Managing requirements strictly for your registered category in PostgreSQL.</div>
+                </div>
+                <div style="text-align: right;">
+                    <span style="background: rgba(232,163,61,0.18); color: var(--amber-deep); padding: 0.45rem 1.1rem; border-radius: 999px; font-weight: 700; font-size: 0.85rem; border: 1px solid var(--amber); display: inline-flex; align-items: center; gap: 0.4rem;">
+                        🔒 CATEGORY: {cat_name} (LOCKED)
+                    </span>
+                    <div style="font-size: 0.72rem; color: var(--muted); margin-top: 0.35rem;">Controlled system category &middot; Non-editable</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Automatically query strictly matching category from PostgreSQL (Authorization enforced at DB level)
+    requirements = get_requirements_for_organization(org_id)
+
+    # 3. KPI Metrics / Number of available requirements
+    total_count = len(requirements)
+    new_count = sum(1 for r in requirements if r.get("Status") == "New")
+    active_count = sum(1 for r in requirements if r.get("Status") in ("Claimed", "In Progress"))
+    completed_count = sum(1 for r in requirements if r.get("Status") == "Completed")
+
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    with col_m1:
+        st.metric(f"Total {cat_display} Requirements", total_count)
+    with col_m2:
+        st.metric("New Requests", new_count)
+    with col_m3:
+        st.metric("Claimed / In Progress", active_count)
+    with col_m4:
+        st.metric("Completed", completed_count)
+
+    st.markdown("---")
+
+    # Action Toolbar: Search, Status Filter, and Excel Export
+    col_filter, col_search, col_export = st.columns([1.2, 1.4, 1.2])
+    with col_filter:
+        status_filter = st.selectbox(
+            "Filter by Status",
+            options=["All Statuses", "New", "Claimed", "In Progress", "Completed", "Cancelled"],
+            key="org_dash_status_filter",
+        )
+    with col_search:
+        search_query = st.text_input(
+            "Search Requirements",
+            placeholder="Search by Lead ID or City...",
+            key="org_dash_search",
+        )
+    with col_export:
+        st.markdown("<div style='height: 1.7rem;'></div>", unsafe_allow_html=True)
+        try:
+            excel_bytes = get_excel_export_bytes(organization_id=org_id)
+            st.download_button(
+                label=f"📥 Export {cat_display} Leads (.xlsx)",
+                data=excel_bytes,
+                file_name=f"{org_name.lower().replace(' ', '_')}_{cat_name.lower()}_leads.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="org_dash_export_btn",
+            )
+        except Exception as exc:
+            st.caption(f"Export unavailable: {exc}")
+
+    # Apply filters locally on the already category-isolated dataset
+    filtered = requirements
+    if status_filter != "All Statuses":
+        filtered = [r for r in filtered if r.get("Status") == status_filter]
+    if search_query and search_query.strip():
+        q = search_query.strip().lower()
+        filtered = [
+            r for r in filtered
+            if q in str(r.get("Lead ID", "")).lower()
+            or q in str(r.get("City", "")).lower()
+            or q in str(r.get("Name", "")).lower()
+        ]
+
+    # Empty Result State handling
+    if total_count == 0:
+        st.markdown(
+            f"""
+            <div style="background: white; border: 2px dashed var(--border); border-radius: 16px; padding: 3rem 1.5rem; text-align: center; margin: 1.5rem 0;">
+                <div style="font-size: 2.5rem; margin-bottom: 0.6rem;">📋</div>
+                <h3 style="font-family: 'Fraunces', serif; color: var(--ink); margin-bottom: 0.4rem;">No {cat_display} Requirements Available</h3>
+                <p style="color: var(--muted); font-size: 0.92rem; max-width: 480px; margin: 0 auto; line-height: 1.5;">
+                    There are currently no customer submissions for your registered category (<b>{cat_display}</b>).
+                    New requirements submitted by normal users through public forms will appear here automatically in real time.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    if not filtered:
+        st.info(f"No requirements found matching the status '{status_filter}' or search criteria.")
+        return
+
+    # 4. Summary Table View (Sensitive info masked for high-level overview)
+    tab_list, tab_table = st.tabs(["📌 Detailed Requirements List", "📊 Summary Table View"])
+
+    with tab_table:
+        table_rows = []
+        for r in filtered:
+            # Privacy protection: mask customer contact number in overview table
+            masked_phone = mask_contact_info(r.get("Mobile"))
+            table_rows.append({
+                "Lead ID": r.get("Lead ID"),
+                "Date": str(r.get("Date Time", ""))[:16],
+                "Customer": r.get("Name"),
+                "Contact (Masked)": masked_phone,
+                "City": r.get("City"),
+                "Budget": f"₹{r.get('Budget', 0):,.0f}",
+                "Status": r.get("Status", "New"),
+            })
+        st.dataframe(table_rows, use_container_width=True)
+
+    with tab_list:
+        # 5, 6 & 7. Detailed Matching Requirements Cards with Status & Relevant Actions
+        for idx, req in enumerate(filtered):
+            lead_id = req.get("Lead ID", f"REQ-{idx+1}")
+            customer_name = req.get("Name", "Customer")
+            city = req.get("City", "N/A")
+            budget = req.get("Budget", 0)
+            date_time = req.get("Date Time", "")
+            current_status = req.get("Status", "New")
+
+            # Status pill color mapping
+            status_colors = {
+                "New": ("rgba(232,163,61,0.15)", "#C77F1F"),
+                "Claimed": ("rgba(52,152,219,0.15)", "#2980B9"),
+                "In Progress": ("rgba(155,89,182,0.15)", "#8E44AD"),
+                "Completed": ("rgba(31,122,92,0.15)", "#1F7A5C"),
+                "Cancelled": ("rgba(127,140,141,0.15)", "#7F8C8D"),
+            }
+            bg_col, text_col = status_colors.get(current_status, ("rgba(22,36,63,0.1)", "#16243F"))
+
+            expander_title = (
+                f"📌 {lead_id} — {customer_name} ({city}) &middot; Budget: ₹{budget:,.0f} &middot; [{current_status}]"
+            )
+
+            with st.expander(expander_title, expanded=(idx == 0 and len(filtered) == 1)):
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown(f"**Customer Name:** {customer_name}")
+                    st.markdown(f"**Mobile Contact:** `{req.get('Mobile', '')}`")
+                    if req.get("Email"):
+                        st.markdown(f"**Email Address:** {req.get('Email')}")
+                    st.markdown(f"**Location / City:** {city}, {req.get('State', '')} (PIN: {req.get('Pincode', 'N/A')})")
+                    if req.get("Address"):
+                        st.markdown(f"**Full Address:** {req.get('Address')}")
+
+                with c2:
+                    st.markdown(f"**Submitted Date:** {date_time}")
+                    st.markdown(f"**Budget:** ₹{budget:,.0f}")
+                    st.markdown(f"**Preferred Timing:** {req.get('Preferred Timing', 'Flexible')}")
+                    if req.get("Start Date"):
+                        st.markdown(f"**Expected Start Date:** {req.get('Start Date')}")
+                    st.markdown(
+                        f"""
+                        <div style="margin-top: 0.4rem;">
+                            <b>Current Status:</b>
+                            <span style="background: {bg_col}; color: {text_col}; padding: 0.2rem 0.6rem; border-radius: 999px; font-weight: 700; font-size: 0.78rem;">
+                                {current_status}
+                            </span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                # Category-Specific Details
+                st.markdown("---")
+                st.markdown("##### 🔍 Service Requirement Specifications")
+                sc1, sc2 = st.columns(2)
+                with sc1:
+                    if cat_name == "COOK":
+                        st.markdown(f"**Cuisine Type:** {req.get('Cuisine Type', 'Not specified')}")
+                        st.markdown(f"**Meals Per Day:** {req.get('Meals Per Day', 'Not specified')}")
+                    elif cat_name == "DRIVER":
+                        st.markdown(f"**Vehicle Type:** {req.get('Vehicle Type', 'Not specified')}")
+                        st.markdown(f"**License Required:** {req.get('License Required', 'Not specified')}")
+                    elif cat_name == "SECURITY_GUARD":
+                        st.markdown(f"**Duty Shift:** {req.get('Day/Night Shift', 'Not specified')}")
+                        st.markdown(f"**Site Type:** {req.get('Residential/Commercial', 'Not specified')}")
+
+                with sc2:
+                    if req.get("Additional Notes"):
+                        st.markdown(f"**Additional Customer Notes:** {req.get('Additional Notes')}")
+                    else:
+                        st.caption("No additional customer notes provided.")
+
+                # 7. Relevant Actions: Status Progression / Update
+                st.markdown("---")
+                st.markdown("##### ⚡ Manage Requirement Status")
+                act_col1, act_col2 = st.columns([1.5, 1])
+
+                with act_col1:
+                    status_idx = (
+                        VALID_REQUIREMENT_STATUSES.index(current_status)
+                        if current_status in VALID_REQUIREMENT_STATUSES
+                        else 0
+                    )
+                    selected_status = st.selectbox(
+                        "Change Status To:",
+                        options=VALID_REQUIREMENT_STATUSES,
+                        index=status_idx,
+                        key=f"status_select_{lead_id}",
+                    )
+
+                with act_col2:
+                    st.markdown("<div style='height: 1.7rem;'></div>", unsafe_allow_html=True)
+                    if st.button("Update Status", key=f"btn_update_status_{lead_id}", use_container_width=True):
+                        if selected_status == current_status:
+                            st.info("Status is already set to this value.")
+                        else:
+                            success, msg, _ = update_requirement_status(
+                                lead_id=lead_id,
+                                new_status=selected_status,
+                                organization_id=org_id,
+                            )
+                            if success:
+                                st.success(f"Status for {lead_id} updated to '{selected_status}' successfully!")
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+
+def render_admin_dashboard(user: Dict[str, Any]):
+    """
+    Dedicated dashboard for Platform Administrators.
+    Can manage and view all categories, all organizations, and all requirements.
+    """
+    if not user or not is_admin_user(user):
+        st.error("⛔ **Access Denied**: Platform Administrator credentials required to access this dashboard.")
+        return
+    st.markdown(
+        """
+        <div style="background: white; border: 1px solid var(--border); border-radius: 16px; padding: 1.6rem; margin-bottom: 1.5rem; box-shadow: 0 10px 30px -15px rgba(22,36,63,0.15);">
+            <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 600;">Platform Administration</div>
+            <h2 style="margin: 0.2rem 0; font-family: 'Fraunces', serif; color: var(--ink);">Global Management Console</h2>
+            <div style="font-size: 0.85rem; color: var(--muted);">Full access across all service categories, organizations, and customer requirements.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    categories = get_controlled_categories()
+    organizations = get_all_organizations_with_categories()
+    all_reqs = get_all_requirements_for_admin()
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Service Categories", len(categories))
+    with c2:
+        st.metric("Registered Organizations", len(organizations))
+    with c3:
+        st.metric("Total Platform Requirements", len(all_reqs))
+
+    st.markdown("---")
+
+    tab_reqs, tab_orgs, tab_cats, tab_export = st.tabs([
+        "📋 All Requirements",
+        "🏢 Registered Organizations",
+        "🏷️ Controlled Categories",
+        "📊 Master Export",
+    ])
+
+    with tab_reqs:
+        cat_filter = st.selectbox("Filter by Category", options=["All Categories"] + [c["name"] for c in categories], key="admin_cat_filter")
+        filtered_reqs = all_reqs
+        if cat_filter != "All Categories":
+            filtered_reqs = [r for r in all_reqs if r.get("category_id") == next((c["id"] for c in categories if c["name"] == cat_filter), None)]
+
+        st.caption(f"Displaying {len(filtered_reqs)} requirement(s)")
+        for r in filtered_reqs:
+            with st.expander(f"📌 {r.get('Lead ID')} — {r.get('Service Type')} &middot; {r.get('Name')} ({r.get('City')})"):
+                st.write(r)
+
+    with tab_orgs:
+        st.markdown("#### Organizations & Category Bindings")
+        for o in organizations:
+            st.markdown(
+                f"- **{o['organization_name']}** (Slug: `{o['slug']}`) &middot; Category: **{o['category_name']}** &middot; Status: `{o['status']}`"
+            )
+
+    with tab_cats:
+        st.markdown("#### Controlled System Categories")
+        st.caption("Category values are controlled system entities and cannot be modified arbitrarily.")
+        for c in categories:
+            st.markdown(f"- **ID {c['id']}:** `{c['name']}` ({c['display_name']})")
+
+    with tab_export:
+        st.markdown("#### Platform-Wide Data Export")
+        try:
+            excel_bytes = get_excel_export_bytes()
+            st.download_button(
+                label="📥 Download Master Portal Requirements (.xlsx)",
+                data=excel_bytes,
+                file_name="master_facility_management_export.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="admin_master_export_btn",
+            )
+        except Exception as exc:
+            st.caption(f"Master export error: {exc}")
+
+
+def render_my_requests(user: Dict[str, Any]):
+    """
+    Customer portal allowing normal users to track only their own submissions.
+    Normal users CANNOT access organization dashboards or other users' requirements.
+    """
+    if not user:
+        st.error("⛔ **Access Denied**: Please sign in to view your submissions.")
+        return
+
+    user_id = user.get("id")
+    user_phone = user.get("phone")
+    my_reqs = get_user_requirements(user_id=user_id, mobile=user_phone)
+
+    st.markdown("### 📋 My Service Submissions")
+    st.caption("You can track your service requests below. Normal users can only view their own submissions.")
+
+    if not my_reqs:
+        st.info("You haven't submitted any service requests yet.")
+        if st.button("Browse Public Services", key="btn_my_reqs_browse"):
+            st.session_state.current_view = "home"
+            st.rerun()
+    else:
+        for r in my_reqs:
+            with st.expander(f"📌 {r.get('Lead ID')} — {r.get('Service Type')} ({r.get('City')}) &middot; Status: {r.get('Status')}"):
+                st.markdown(f"**Service:** {r.get('Service Type')}")
+                st.markdown(f"**City:** {r.get('City')}")
+                st.markdown(f"**Budget:** ₹{r.get('Budget', 0):,.0f}")
+                st.markdown(f"**Date Submitted:** {r.get('Date Time')}")
+                st.markdown(f"**Status:** `{r.get('Status')}`")
 
 
 def render_hero():
@@ -593,7 +1034,6 @@ def render_hero():
         )
 
     with right:
-        current_tenant = get_current_tenant()
         request = get_request()
 
         with st.container(key="token_card"):
@@ -602,20 +1042,17 @@ def render_hero():
                 service = (request.get("service") or "").upper()
 
                 st.markdown(
-                    f"""<div class="token-eyebrow">YOUR REQUEST ({current_tenant['name']})</div><div class="token-number">{lead_id}</div><div class="token-perforation"></div><div class="token-status-row"><span>{service}</span><span class="token-pill">SUBMITTED</span></div>""",
+                    f"""<div class="token-eyebrow">YOUR REQUEST</div><div class="token-number">{lead_id}</div><div class="token-perforation"></div><div class="token-status-row"><span>{service}</span><span class="token-pill">SUBMITTED</span></div>""",
                     unsafe_allow_html=True,
                 )
 
                 with st.expander("View request details"):
-                    details = find_lead_by_mobile(request.get("mobile"), organization_id=current_tenant["id"])
+                    details = find_lead_by_mobile(request.get("mobile"))
                     if details:
                         for field_key, field_value in details.items():
                             st.markdown(f"**{field_key}:** {field_value}")
                     else:
-                        st.caption(
-                            "We couldn't load the full details for this "
-                            "request right now — please check back later."
-                        )
+                        st.caption("We couldn't load the full details for this request right now — please check back later.")
 
                 if st.button("Not you? Clear this", key="clear_request_btn", use_container_width=True):
                     delete_request()
@@ -623,7 +1060,7 @@ def render_hero():
 
             else:
                 st.markdown(
-                    f"""<div class="token-eyebrow">FIND YOUR REQUEST ({current_tenant['name']})</div><div class="token-number">Track an existing request</div><div class="token-perforation"></div>""",
+                    """<div class="token-eyebrow">FIND YOUR REQUEST</div><div class="token-number">Track an existing request</div><div class="token-perforation"></div>""",
                     unsafe_allow_html=True,
                 )
 
@@ -644,7 +1081,7 @@ def render_hero():
                             unsafe_allow_html=True,
                         )
                     else:
-                        found = find_lead_by_mobile(mobile_clean, organization_id=current_tenant["id"])
+                        found = find_lead_by_mobile(mobile_clean)
 
                         if found:
                             save_request(
@@ -655,7 +1092,7 @@ def render_hero():
                             st.rerun()
                         else:
                             st.markdown(
-                                f'<div class="field-hint warning">⚠ No request found for that number under {current_tenant["name"]}</div>',
+                                '<div class="field-hint warning">⚠ No request found for that mobile number.</div>',
                                 unsafe_allow_html=True,
                             )
 
@@ -690,21 +1127,8 @@ def render_service_cards():
 
 
 def render_home():
-    current_tenant = get_current_tenant()
     render_hero()
     render_service_cards()
-    with st.expander(f"📊 Export {current_tenant['name']} Leads to Excel (Admin / Reports)"):
-        try:
-            excel_data = get_excel_export_bytes(organization_id=current_tenant["id"])
-            st.download_button(
-                label=f"📥 Download {current_tenant['name']} Leads (.xlsx)",
-                data=excel_data,
-                file_name=f"{current_tenant['slug']}_leads.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-        except Exception as exc:
-            st.caption(f"Export currently unavailable: {exc}")
     st.markdown(
         '<div class="footer-note">No spam calls. Just genuine requests, routed straight to your inbox.</div>',
         unsafe_allow_html=True,
@@ -723,9 +1147,48 @@ def main():
     render_brand_bar()
     float_init()
 
-    # Protected application functionality requires authentication
-    if not is_authenticated():
+    user = get_current_user()
+
+    # 1. Organization Role -> Organization Dashboard
+    if is_organization_user() and user:
+        render_organization_dashboard(user)
+        render_chatbot()
+        return
+
+    # 2. Admin Role -> Admin Dashboard
+    if is_admin_user() and user:
+        render_admin_dashboard(user)
+        render_chatbot()
+        return
+
+    # 3. Normal User or Public Visitor Views
+    current_view = st.session_state.get("current_view")
+
+    # Explicit view manipulation guards
+    if current_view == "admin" and not (is_admin_user() and user):
+        st.error("⛔ **Access Denied**: Platform Administrator credentials required.")
+        st.session_state.current_view = "home"
+        st.rerun()
+        return
+
+    if current_view == "organization" and not (is_organization_user() and user):
+        st.error("⛔ **Access Denied**: Organization credentials required.")
+        st.session_state.current_view = "home"
+        st.rerun()
+        return
+
+    if current_view == "auth":
         render_auth_screen()
+        render_chatbot()
+        return
+
+    if current_view == "my_requests":
+        if user:
+            render_my_requests(user)
+        else:
+            st.session_state.current_view = "auth"
+            st.rerun()
+        render_chatbot()
         return
 
     if "chat_open" not in st.session_state:
@@ -733,12 +1196,15 @@ def main():
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
+
     selected = st.session_state.selected_service
     if selected is None:
         render_home()
     else:
         SERVICE_RENDERERS[selected]()
+
     render_chatbot()
+
 
 if __name__ == "__main__":
     main()

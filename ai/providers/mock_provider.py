@@ -63,5 +63,11 @@ class MockAIProvider(BaseAIProvider):
                 "Could not establish a connection to the cloud AI service. "
                 "Please verify network connectivity."
             )
+        elif self._simulate_error == "malformed":
+            return (
+                "⚠️ **Malformed AI Response**\n\n"
+                "Received an unexpected or malformed response format from the AI provider. "
+                "Please try again."
+            )
 
         return f"Echo: Based on the knowledge base, for question '{prompt[:40]}...': {self._default_response}"

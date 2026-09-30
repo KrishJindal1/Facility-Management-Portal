@@ -80,6 +80,34 @@ except Exception as exc:
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+_DEFAULT_ENGINE = engine
+_DEFAULT_SESSIONLOCAL = SessionLocal
+_DEFAULT_URL = NORMALIZED_DATABASE_URL
+
+
+def configure_test_database(test_url: str = None):
+    """
+    Switches connection engine to an isolated test database (e.g. temporary SQLite file)
+    to guarantee production database is never modified by automated test runs.
+    """
+    global engine, SessionLocal, NORMALIZED_DATABASE_URL
+    from config import BASE_DIR
+    if not test_url:
+        test_url = f"sqlite:///{(BASE_DIR / 'data' / 'test_isolated.db').resolve()}"
+    NORMALIZED_DATABASE_URL = test_url
+    engine = create_engine(NORMALIZED_DATABASE_URL, connect_args={"check_same_thread": False})
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    return engine
+
+
+def reset_database_to_default():
+    """Restores database engine and sessionmaker to original production/default settings."""
+    global engine, SessionLocal, NORMALIZED_DATABASE_URL
+    engine = _DEFAULT_ENGINE
+    SessionLocal = _DEFAULT_SESSIONLOCAL
+    NORMALIZED_DATABASE_URL = _DEFAULT_URL
+
 
 @contextmanager
 def get_db():

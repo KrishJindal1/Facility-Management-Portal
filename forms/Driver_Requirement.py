@@ -202,12 +202,29 @@ def render_driver_form():
             for error in errors:
                 st.error(error)
         else:
-            lead_data["Lead ID"] = generate_serial(SERVICE_NAME)
+            lead_id = generate_serial(SERVICE_NAME)
+            lead_data["Lead ID"] = lead_id
             save_lead(SERVICE_NAME, lead_data)
             save_request(
-                lead_data["Lead ID"],
+                lead_id,
                 lead_data.get("Mobile"),
-                SERVICE_NAME
+                SERVICE_NAME,
             )
             
             st.success("Your requirement has been submitted successfully!")
+            st.markdown(
+                f"""
+                <div style="background: white; border: 1px solid var(--border); border-radius: 14px; padding: 1.2rem 1.5rem; margin: 1rem 0; box-shadow: 0 4px 15px rgba(22,36,63,0.06);">
+                    <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); font-weight: 600;">Tracked Requirement Identifier</div>
+                    <div style="font-family: 'IBM Plex Mono', monospace; font-size: 1.6rem; font-weight: 700; color: var(--ink); margin: 0.3rem 0;">{lead_id}</div>
+                    <div style="font-size: 0.85rem; color: var(--muted);">
+                        Category: <b>Driver</b> &middot; Status: <b>New</b><br>
+                        Your request has been stored. You can track this submission anytime from the home screen using your identifier or mobile number (<b>{lead_data.get('Mobile')}</b>).
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("← Return to Home / Track Request", key="nav_home_driver"):
+                st.session_state.selected_service = None
+                st.rerun()

@@ -55,9 +55,36 @@ class OllamaProvider(BaseAIProvider):
             response = requests.post(endpoint, json=payload, timeout=self._timeout)
 
             if response.status_code == 200:
-                data = response.json()
-                msg = data.get("message", {})
-                return msg.get("content", "").strip()
+                try:
+                    data = response.json()
+                except Exception as json_err:
+                    logger.error("Failed to parse JSON response from Ollama: %s", json_err)
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "Received an unparseable response from the Ollama server. "
+                        "Please try again."
+                    )
+
+                if not isinstance(data, dict):
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "Received an unexpected response structure from the Ollama server. "
+                        "Please try again."
+                    )
+
+                msg = data.get("message")
+                if not isinstance(msg, dict) or "content" not in msg:
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "Ollama response missing message content. "
+                        "Please try again."
+                    )
+
+                content = msg.get("content")
+                if content is None or not str(content).strip():
+                    return "The AI returned an empty response. Please rephrase your question."
+
+                return str(content).strip()
             else:
                 return f"⚠️ **Ollama Error**: Server returned status code {response.status_code}."
 

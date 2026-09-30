@@ -1,29 +1,30 @@
 """
-Automated Multi-Tenant Isolation Test Suite.
-Verifies Phase 3 multi-tenancy requirements:
-1. Multiple users per organization.
-2. Every lead/request belongs to an organization.
-3. Users only access data belonging to their organization.
-4. Organization A cannot see Organization B's requirements (via mobile or lead ID).
-5. Minimum database structure (organization_id foreign keys, indexes).
-6. Tenant filtering is always enforced at the data-access layer.
-7. Preserves existing service forms and data structures.
+Automated Category-Based Tenant Isolation Test Suite.
+Verifies Phase 2 business model and isolation rules:
+1. Normal user submits requirements belonging to Category and User.
+2. Organization registers with one category and sees ONLY requirements matching its category.
+3. Cook Organization (Org 1) sees Cook requirements, cannot see Driver or Security requirements.
+4. Driver Organization (Org 2) sees Driver requirements, cannot see Cook or Security requirements.
+5. Cross-organization lookups by mobile or Lead ID are strictly prevented across categories.
+6. Data access layer enforces category validation and bounds.
+7. Excel export generated for an organization only contains its category's requirements.
 """
 import io
 import unittest
 from openpyxl import load_workbook
 from database.connection import get_db
-from database.models import Organization, User, Lead
+from database.models import Organization, User, Requirement, Category
 from database.repository import (
+    save_requirement_to_db,
     save_lead_to_db,
     get_latest_lead_by_mobile,
     get_lead_by_id,
     generate_next_lead_id,
-    get_all_leads_for_export,
+    get_all_requirements_for_export,
     _resolve_tenant_id,
     init_database,
 )
-from storage.excel_handler import export_leads_to_excel, get_excel_export_bytes
+from storage.excel_handler import get_excel_export_bytes
 
 
 class TestTenantIsolation(unittest.TestCase):
@@ -40,9 +41,11 @@ class TestTenantIsolation(unittest.TestCase):
             assert org2 is not None, "Tenant 2 (acme) must exist"
             self.org1_id = int(org1.id)
             self.org2_id = int(org2.id)
+            self.org1_cat_id = int(org1.category_id)
+            self.org2_cat_id = int(org2.category_id)
 
     def test_01_multiple_users_per_organization(self):
-        """Requirement 1: An organization/tenant can have multiple users."""
+        """Requirement: An organization can have multiple staff/admin users."""
         with get_db() as db:
             for em in ("alice@homedesk.com", "bob@homedesk.com", "charlie@acme.com"):
                 old = db.query(User).filter_by(email=em).first()
@@ -53,20 +56,23 @@ class TestTenantIsolation(unittest.TestCase):
             u1 = User(
                 organization_id=self.org1_id,
                 name="Alice Manager",
-                mobile="9800000001",
+                phone="9800000001",
                 email="alice@homedesk.com",
+                role="organization",
             )
             u2 = User(
                 organization_id=self.org1_id,
                 name="Bob Staff",
-                mobile="9800000002",
+                phone="9800000002",
                 email="bob@homedesk.com",
+                role="organization",
             )
             u3 = User(
                 organization_id=self.org2_id,
                 name="Charlie Acme",
-                mobile="9800000003",
+                phone="9800000003",
                 email="charlie@acme.com",
+                role="organization",
             )
             db.add_all([u1, u2, u3])
             db.flush()
@@ -78,140 +84,120 @@ class TestTenantIsolation(unittest.TestCase):
             self.assertIn("Bob Staff", names_in_org1)
             self.assertNotIn("Charlie Acme", names_in_org1)
 
-    def test_02_every_lead_belongs_to_organization(self):
-        """Requirement 2: Every lead/request must belong to an organization."""
+    def test_02_requirement_belongs_to_category_and_user_not_org(self):
+        """Requirements MUST belong to user and category, NOT directly to an organization."""
+        mobile = "9123456780"
+        with get_db() as db:
+            db.query(Requirement).filter_by(mobile=mobile).delete()
+
         lead_payload = {
             "Name": "Tenant 1 Lead Client",
-            "Mobile Number": "9123456780",
+            "Mobile Number": mobile,
             "City": "Mumbai",
             "Budget (INR)": 16000,
             "Cuisine Type": "North Indian",
             "Meals Per Day": 2,
         }
-        saved = save_lead_to_db("Cook", lead_payload, organization_id=self.org1_id)
-        self.assertEqual(saved.get("Organization ID"), self.org1_id)
-        self.assertTrue(saved.get("Lead ID"))
+        saved = save_requirement_to_db("Cook", lead_payload)
+        lead_id = saved["Lead ID"]
+        self.assertTrue(lead_id.startswith("Cook-"))
 
         with get_db() as db:
-            lead_row = (
-                db.query(Lead)
-                .filter_by(organization_id=self.org1_id, lead_id=saved["Lead ID"])
-                .first()
-            )
-            self.assertIsNotNone(lead_row)
-            self.assertEqual(lead_row.organization_id, self.org1_id)
-            self.assertEqual(lead_row.service_type, "Cook")
-            self.assertIsNotNone(lead_row.cook_requirement)
-            self.assertEqual(lead_row.cook_requirement.cuisine_type, "North Indian")
+            req = db.query(Requirement).filter_by(lead_id=lead_id).first()
+            self.assertIsNotNone(req)
+            self.assertEqual(req.category_id, self.org1_cat_id)
+            self.assertIsNotNone(req.user_id)
+            # Must NOT belong directly to an organization
+            self.assertFalse(hasattr(req, "organization_id"))
+            self.assertEqual(req.service_type, "Cook")
+            self.assertIsNotNone(req.cook_requirement)
+            self.assertEqual(req.cook_requirement.cuisine_type, "North Indian")
 
-    def test_03_tenant_lead_id_sequence_isolated(self):
-        """Requirement 5 & 6: Each tenant manages independent sequential lead IDs without collision."""
-        org2_payload = {
-            "Name": "Acme Driver Lead",
-            "Mobile Number": "9234567890",
-            "City": "Delhi",
-            "Budget (INR)": 18000,
-            "Vehicle Type": "SUV",
-            "License Required": "Commercial",
-        }
-        saved_org2 = save_lead_to_db("Driver", org2_payload, organization_id=self.org2_id)
-        self.assertEqual(saved_org2.get("Organization ID"), self.org2_id)
+    def test_03_lead_id_sequence_generation(self):
+        """Lead IDs are generated sequentially with standard service prefixes."""
+        id1 = generate_next_lead_id("Driver")
+        id2 = generate_next_lead_id("Cook")
+        self.assertTrue(id1.startswith("Driver-"))
+        self.assertTrue(id2.startswith("Cook-"))
 
-        org1_payload = {
-            "Name": "HomeDesk Driver Lead",
-            "Mobile Number": "9345678901",
-            "City": "Bangalore",
-            "Budget (INR)": 20000,
-            "Vehicle Type": "Sedan",
-            "License Required": "Private",
-        }
-        saved_org1 = save_lead_to_db("Driver", org1_payload, organization_id=self.org1_id)
-        self.assertEqual(saved_org1.get("Organization ID"), self.org1_id)
-
-    def test_04_cross_tenant_lookup_by_mobile_prevented(self):
-        """Requirement 3 & 4: Organization A must NEVER see Organization B's requirements via mobile."""
+    def test_04_cross_category_lookup_by_mobile_prevented(self):
+        """Organization A (Cook) can see Cook leads; Organization B (Driver) CANNOT."""
         mobile_a = "9456789012"
+        with get_db() as db:
+            db.query(Requirement).filter_by(mobile=mobile_a).delete()
+
         lead_data_a = {
-            "Name": "Confidential Org A Lead",
+            "Name": "Confidential Cook Lead",
             "Mobile Number": mobile_a,
             "City": "Pune",
             "Budget (INR)": 19000,
-            "Day/Night Shift": "Night",
-            "Residential/Commercial": "Commercial",
+            "Cuisine Type": "South Indian",
+            "Meals Per Day": 2,
         }
-        save_lead_to_db("Security Guard", lead_data_a, organization_id=self.org1_id)
+        save_requirement_to_db("Cook", lead_data_a)
 
-        # Query from Org A returns Org A's lead
+        # Query from Org 1 (Cook Organization) finds the lead
         res_org_a = get_latest_lead_by_mobile(mobile_a, organization_id=self.org1_id)
         self.assertIsNotNone(res_org_a)
-        self.assertEqual(res_org_a["Name"], "Confidential Org A Lead")
-        self.assertEqual(res_org_a["Organization ID"], self.org1_id)
+        self.assertEqual(res_org_a["Name"], "Confidential Cook Lead")
 
-        # Query from Org B with Org A's mobile MUST RETURN NONE
+        # Query from Org 2 (Driver Organization) MUST RETURN NONE (Category isolation)
         res_org_b = get_latest_lead_by_mobile(mobile_a, organization_id=self.org2_id)
         self.assertIsNone(
             res_org_b,
-            "CRITICAL SECURITY VIOLATION: Org B accessed Org A's lead via mobile lookup!",
+            "CRITICAL VIOLATION: Driver organization accessed Cook requirement via mobile lookup!",
         )
 
-    def test_05_cross_tenant_lookup_by_lead_id_prevented(self):
-        """Requirement 4: Organization A must NEVER see Organization B's requirements via Lead ID."""
+    def test_05_cross_category_lookup_by_lead_id_prevented(self):
+        """Organization B (Driver) sees Driver leads; Organization A (Cook) cannot."""
+        mobile_b = "9567890123"
+        with get_db() as db:
+            db.query(Requirement).filter_by(mobile=mobile_b).delete()
+
         lead_data_b = {
-            "Name": "Secret Org B Requirement",
-            "Mobile Number": "9567890123",
+            "Name": "Secret Driver Requirement",
+            "Mobile Number": mobile_b,
             "City": "Hyderabad",
             "Budget (INR)": 32000,
-            "Cuisine Type": "South Indian",
-            "Meals Per Day": 3,
+            "Vehicle Type": "SUV",
+            "License Required": "Commercial",
         }
-        saved_b = save_lead_to_db("Cook", lead_data_b, organization_id=self.org2_id)
+        saved_b = save_requirement_to_db("Driver", lead_data_b)
         lead_id_b = saved_b["Lead ID"]
 
-        # Org B can view its own lead
+        # Org 2 (Driver Organization) can view this lead
         found_by_b = get_lead_by_id(lead_id_b, organization_id=self.org2_id)
         self.assertIsNotNone(found_by_b)
-        self.assertEqual(found_by_b["Name"], "Secret Org B Requirement")
-        self.assertEqual(found_by_b["Organization ID"], self.org2_id)
+        self.assertEqual(found_by_b["Name"], "Secret Driver Requirement")
 
-        # Org A CANNOT view Org B's lead
+        # Org 1 (Cook Organization) CANNOT view Driver lead
         found_by_a = get_lead_by_id(lead_id_b, organization_id=self.org1_id)
-        self.assertTrue(
-            found_by_a is None or found_by_a.get("Organization ID") != self.org2_id,
-            "CRITICAL SECURITY VIOLATION: Org A accessed Org B's lead via Lead ID lookup!",
+        self.assertIsNone(
+            found_by_a,
+            "CRITICAL VIOLATION: Cook organization accessed Driver requirement via Lead ID lookup!",
         )
 
-    def test_06_data_access_layer_enforces_tenant_id(self):
-        """Requirement 8 & 9: Tenant isolation enforced at the data-access layer, not UI alone."""
-        # Non-positive or invalid tenant IDs must be rejected
+    def test_06_data_access_layer_enforces_organization_id_validation(self):
+        """Data access layer rejects invalid tenant IDs and non-existent organizations."""
         with self.assertRaises(ValueError):
             _resolve_tenant_id(0)
 
         with self.assertRaises(ValueError):
             _resolve_tenant_id(-5)
 
-        # Attempting to insert lead under non-existent organization must fail
         with self.assertRaises(ValueError):
-            save_lead_to_db("Cook", {"Name": "Invalid Org Lead"}, organization_id=999999)
+            save_requirement_to_db("Cook", {"Name": "Invalid Org Lead"}, organization_id=999999)
 
-    def test_07_excel_export_strictly_scoped_to_tenant(self):
-        """Tenant-scoped Excel export must never leak leads from another organization."""
+    def test_07_excel_export_strictly_scoped_to_organization_category(self):
+        """Organization-scoped Excel export only contains requirements belonging to its category."""
         excel_bytes = get_excel_export_bytes(organization_id=self.org2_id)
         self.assertIsNotNone(excel_bytes)
 
         wb = load_workbook(io.BytesIO(excel_bytes), data_only=True)
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            headers = [c.value for c in ws[1]] if ws.max_row >= 1 else []
-            if "Organization ID" in headers:
-                org_col_idx = headers.index("Organization ID") + 1
-                for row_idx in range(2, ws.max_row + 1):
-                    val = ws.cell(row=row_idx, column=org_col_idx).value
-                    if val is not None:
-                        self.assertEqual(
-                            val,
-                            self.org2_id,
-                            f"Foreign organization lead found in sheet {sheet_name}, row {row_idx}",
-                        )
+        # Org 2 is Driver: its workbook should only have Driver sheet, no Cook or Security Guard data
+        self.assertIn("Driver", wb.sheetnames)
+        self.assertNotIn("Cook", wb.sheetnames)
+        self.assertNotIn("Security Guard", wb.sheetnames)
 
 
 if __name__ == "__main__":

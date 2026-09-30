@@ -1,7 +1,7 @@
 """
-Excel storage and export handler.
-PostgreSQL is the application's primary source of truth.
-This module provides Excel generation, reporting export, and local sync.
+Storage and export handler for HomeDesk Facility Management Portal.
+PostgreSQL is the primary production data store.
+Excel is used strictly for on-demand reporting and data export.
 """
 from datetime import datetime
 import io
@@ -15,7 +15,9 @@ from storage.config import EXCEL_FILE
 from database.repository import (
     init_database,
     save_lead_to_db,
+    save_requirement_to_db,
     get_latest_lead_by_mobile,
+    get_all_requirements_for_export,
     get_all_leads_for_export,
 )
 
@@ -89,27 +91,6 @@ Sheets = {
 }
 
 
-def create_excel_if_not_exists():
-    """Initializes the database schema and creates an empty Excel file if missing."""
-    # Initialize PostgreSQL / database layer first
-    init_database()
-
-    target_file = Path(EXCEL_FILE)
-    if target_file.exists():
-        return
-
-    target_file.parent.mkdir(parents=True, exist_ok=True)
-    wb = Workbook()
-    wb.remove(wb.active)  # Remove default sheet
-
-    for sheet_name, headers in Sheets.items():
-        sheet = wb.create_sheet(title=sheet_name)
-        sheet.append(headers)
-
-    wb.save(target_file)
-    wb.close()
-
-
 def auto_adjust_columns(ws):
     """Adjusts column widths dynamically based on content."""
     for column in ws.columns:
@@ -121,28 +102,12 @@ def auto_adjust_columns(ws):
         ws.column_dimensions[column_letter].width = max(max_length + 3, 12)
 
 
-def append_to_sheet(sheet_name: str, data: Dict[str, Any]):
-    """Appends a row to an Excel worksheet (reporting cache)."""
-    target_file = Path(EXCEL_FILE)
-    if not target_file.exists():
-        create_excel_if_not_exists()
-
+def create_excel_if_not_exists():
+    """Initializes the database schema if needed."""
     try:
-        wb = load_workbook(target_file)
-        if sheet_name not in wb.sheetnames:
-            ws = wb.create_sheet(title=sheet_name)
-            ws.append(Sheets.get(sheet_name, list(data.keys())))
-        else:
-            ws = wb[sheet_name]
-
-        headers = [cell.value for cell in ws[1]]
-        row = [data.get(header, "") for header in headers]
-        ws.append(row)
-        auto_adjust_columns(ws)
-        wb.save(target_file)
-        wb.close()
+        init_database()
     except Exception as exc:
-        logger.warning("Could not append row to Excel reporting cache: %s", exc)
+        logger.warning("Database init check in excel_handler warning: %s", exc)
 
 
 def save_lead(
@@ -151,40 +116,19 @@ def save_lead(
     organization_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Saves a lead to PostgreSQL scoped to an organization as the primary source of truth,
-    then updates the Excel export file for reporting.
+    Saves a requirement to PostgreSQL as the primary production data store.
+    No longer performs synchronous file writes to local Excel spreadsheets.
     """
     lead_data.setdefault("Date Time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     lead_data.setdefault("Status", "New")
 
-    # 1. Primary write: PostgreSQL database with tenant isolation
     try:
-        saved = save_lead_to_db(service_name, lead_data, organization_id=organization_id)
+        saved = save_requirement_to_db(service_name, lead_data, organization_id=organization_id)
         lead_data.update(saved)
+        return lead_data
     except Exception as exc:
-        logger.error("Database save failed: %s", exc)
+        logger.error("PostgreSQL save failed: %s", exc)
         raise
-
-    # 2. Secondary write: Excel reporting file (kept for export compatibility)
-    try:
-        append_to_sheet(service_name, lead_data)
-        append_to_sheet(
-            "All Leads",
-            {
-                "Lead ID": lead_data["Lead ID"],
-                "Date Time": lead_data["Date Time"],
-                "Name": lead_data["Name"],
-                "Mobile": lead_data["Mobile"],
-                "Service Type": service_name,
-                "City": lead_data["City"],
-                "Budget": lead_data["Budget"],
-                "Status": lead_data["Status"],
-            },
-        )
-    except Exception as exc:
-        logger.warning("Excel sync encountered error (database write succeeded): %s", exc)
-
-    return lead_data
 
 
 def find_latest_request_by_mobile(
@@ -192,97 +136,73 @@ def find_latest_request_by_mobile(
     organization_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Retrieves the latest request for a mobile number strictly within the specified tenant.
-    Queries PostgreSQL first; falls back to Excel if database is unreachable.
+    Retrieves the latest request for a mobile number from PostgreSQL.
     """
     mobile_clean = str(mobile or "").strip()
     if not mobile_clean:
         return None
 
-    # Primary: Query PostgreSQL with tenant filter
     try:
         db_lead = get_latest_lead_by_mobile(mobile_clean, organization_id=organization_id)
         if db_lead:
             return db_lead
     except Exception as exc:
-        logger.warning("Database lookup failed, falling back to Excel: %s", exc)
-
-    # Fallback: Query Excel if database did not find or failed
-    target_file = Path(EXCEL_FILE)
-    if not target_file.exists():
-        return None
-
-    try:
-        workbook = load_workbook(target_file, data_only=True)
-        for sheet_name in ("Cook", "Driver", "Security Guard", "All Leads"):
-            if sheet_name not in workbook.sheetnames:
-                continue
-
-            sheet = workbook[sheet_name]
-            headers = [cell.value for cell in sheet[1]] if sheet.max_row >= 1 else []
-            if "Mobile" not in headers:
-                continue
-
-            mobile_col = headers.index("Mobile") + 1
-            for row in range(sheet.max_row, 1, -1):
-                cell_val = str(sheet.cell(row, mobile_col).value or "").strip()
-                if cell_val == mobile_clean:
-                    data = {}
-                    for col, header in enumerate(headers, start=1):
-                        data[header] = sheet.cell(row, col).value
-                    data["Service"] = sheet_name if sheet_name != "All Leads" else data.get("Service Type", "Cook")
-                    workbook.close()
-                    return data
-
-        workbook.close()
-    except Exception as exc:
-        logger.error("Excel fallback search failed: %s", exc)
+        logger.error("Database lookup error for mobile '%s': %s", mobile_clean, exc)
 
     return None
 
 
-def export_leads_to_excel(
+def get_excel_export_bytes(
     organization_id: Optional[int] = None,
-    target_path: Optional[Path] = None,
-) -> Path:
+    category_id: Optional[int] = None,
+) -> bytes:
     """
-    Reads leads strictly for the given tenant from PostgreSQL and generates
-    an Excel workbook containing all 4 sheets: All Leads, Cook, Driver, Security Guard.
+    Generates an Excel workbook dynamically in-memory from PostgreSQL data
+    and returns raw bytes for browser download.
+    If scoped to an organization/category, includes only the sheets matching that category.
     """
-    export_file = Path(target_path or EXCEL_FILE)
-    export_file.parent.mkdir(parents=True, exist_ok=True)
-
-    all_data = get_all_leads_for_export(organization_id=organization_id)
-
+    all_data = get_all_requirements_for_export(
+        organization_id=organization_id,
+        category_id=category_id,
+    )
     wb = Workbook()
-    wb.remove(wb.active)  # Remove default sheet
+    wb.remove(wb.active)  # Remove default blank sheet
 
-    for sheet_name, headers in Sheets.items():
-        ws = wb.create_sheet(title=sheet_name)
-        ws.append(headers)
+    allowed_sheet_names = None
+    if organization_id or category_id:
+        target_cat_id = category_id
+        if target_cat_id is None and organization_id:
+            try:
+                from database.connection import get_db
+                from database.models import Organization
+                with get_db() as db:
+                    org = db.query(Organization).filter_by(id=organization_id).first()
+                    if org:
+                        target_cat_id = org.category_id
+            except Exception:
+                pass
 
-        rows = all_data.get(sheet_name, [])
-        for item in rows:
-            row = [item.get(h, "") for h in headers]
-            ws.append(row)
+        if target_cat_id:
+            try:
+                from database.connection import get_db
+                from database.models import Category
+                from database.repository import CATEGORY_NAME_TO_SERVICE
+                with get_db() as db:
+                    cat = db.query(Category).filter_by(id=target_cat_id).first()
+                    if cat:
+                        display = cat.display_name or CATEGORY_NAME_TO_SERVICE.get(cat.name, cat.name)
+                        allowed_sheet_names = [display]
+            except Exception:
+                pass
 
-        auto_adjust_columns(ws)
+    sheets_to_export = [
+        (s, headers) for s, headers in Sheets.items()
+        if allowed_sheet_names is None or s in allowed_sheet_names
+    ]
+    if not sheets_to_export:
+        sheets_to_export = list(Sheets.items())
 
-    wb.save(export_file)
-    wb.close()
-    return export_file
-
-
-def get_excel_export_bytes(organization_id: Optional[int] = None) -> bytes:
-    """
-    Generates the Excel file in-memory strictly for the given tenant from PostgreSQL
-    and returns bytes for direct browser download in Streamlit.
-    """
-    all_data = get_all_leads_for_export(organization_id=organization_id)
-    wb = Workbook()
-    wb.remove(wb.active)
-
-    for sheet_name, headers in Sheets.items():
+    for sheet_name, headers in sheets_to_export:
         ws = wb.create_sheet(title=sheet_name)
         ws.append(headers)
 
@@ -298,3 +218,24 @@ def get_excel_export_bytes(organization_id: Optional[int] = None) -> bytes:
     wb.close()
     buffer.seek(0)
     return buffer.getvalue()
+
+
+def export_leads_to_excel(
+    organization_id: Optional[int] = None,
+    category_id: Optional[int] = None,
+    target_path: Optional[Path] = None,
+) -> Path:
+    """
+    Reads requirements from PostgreSQL and generates an Excel workbook on demand.
+    """
+    export_file = Path(target_path or EXCEL_FILE)
+    export_file.parent.mkdir(parents=True, exist_ok=True)
+
+    excel_bytes = get_excel_export_bytes(
+        organization_id=organization_id,
+        category_id=category_id,
+    )
+    with open(export_file, "wb") as f:
+        f.write(excel_bytes)
+
+    return export_file

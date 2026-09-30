@@ -130,7 +130,10 @@ class TestAuthenticationAndSecurity(unittest.TestCase):
         user_email = "owner@zenithfacilities.com"
 
         with get_db() as db:
-            old_org = db.query(Organization).filter_by(name=org_name).first()
+            old_user = db.query(User).filter_by(email=user_email).first()
+            if old_user:
+                db.delete(old_user)
+            old_org = db.query(Organization).filter_by(organization_name=org_name).first()
             if old_org:
                 db.delete(old_org)
 
@@ -140,6 +143,7 @@ class TestAuthenticationAndSecurity(unittest.TestCase):
             mobile="9876543219",
             password="SecurePassword2026!",
             new_org_name=org_name,
+            category_name="Cook",
         )
         self.assertTrue(success, f"Registration with new org failed: {msg}")
         self.assertEqual(user_data["organization_name"], org_name)

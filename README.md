@@ -52,10 +52,37 @@ AI_MODEL=gpt-4o-mini
 ```
 
 ### 4. Running the Application Locally
+
+#### Option A: Modern React Frontend + FastAPI Backend (Recommended)
+You can run the API backend and the React development server concurrently:
+
+1. **Start the FastAPI Backend:**
+   ```bash
+   uvicorn api.main:app --reload --port 8000
+   ```
+   Interactive API documentation available at `http://localhost:8000/docs`.
+
+2. **Start the React Frontend Dev Server:**
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+   Open `http://localhost:3000` in your browser.
+
+3. **Or Single-Command Production Mode:**
+   FastAPI automatically serves the compiled React frontend from `frontend/dist`:
+   ```bash
+   cd frontend && npm run build && cd ..
+   uvicorn api.main:app --port 8000
+   ```
+   Open `http://localhost:8000` directly.
+
+#### Option B: Legacy Streamlit UI
 ```bash
 streamlit run app.py
 ```
-Open your browser at `http://localhost:8501`.
+Open `http://localhost:8501`.
 
 ---
 

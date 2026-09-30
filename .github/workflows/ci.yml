@@ -1,14 +1,15 @@
 name: CI/CD Pipeline
 
-'on':
+on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   test:
-    name: Build, Database & Test Suite
+    name: Build & Test Suite
     runs-on: ubuntu-latest
 
     services:
@@ -17,7 +18,7 @@ jobs:
         env:
           POSTGRES_DB: facility_management_test
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_PASSWORD: testpassword
         ports:
           - 5432:5432
         options: >-
@@ -27,7 +28,7 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/facility_management_test
+      DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/facility_management_test
       APP_ENV: test
       AI_PROVIDER: mock
       PYTHONUNBUFFERED: "1"
@@ -42,87 +43,85 @@ jobs:
           python-version-file: '.python-version'
           cache: 'pip'
 
-      - name: Upgrade pip and install dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Verify Environment & Dialect Support
+      - name: Verify Environment & Imports
         run: |
           python --version
-          python -c "import psycopg2, sqlalchemy, streamlit; print('Core dependencies loaded successfully')"
+          python -c "import psycopg2, sqlalchemy, streamlit, fastapi; print('All core application dependencies verified successfully.')"
 
       - name: Initialize PostgreSQL Database Schema & Seed Data
         run: |
           python -m database.init_db
 
-      - name: Run Test Suite
+      - name: Run Complete Automated Test Suite
         run: |
           python -m unittest discover -s tests -p "test_*.py" -v
 
   deploy:
     name: Deploy to Render Production
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
 
     steps:
-      - name: Trigger Render Deploy Hook
+      - name: Trigger Render Production Deployment
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: |
           if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
-            echo "::warning::RENDER_DEPLOY_HOOK_URL secret is not configured in GitHub repository secrets."
-            echo "Skipping deployment. To enable automated Render deployments after CI passes:"
-            echo "1. Go to Render Dashboard -> Web Service -> Settings -> Deploy Hook."
-            echo "2. Copy the Deploy Hook URL."
-            echo "3. Add it as 'RENDER_DEPLOY_HOOK_URL' in GitHub repo Settings -> Secrets and variables -> Actions."
+            echo "::warning ::RENDER_DEPLOY_HOOK_URL secret is not configured in repository secrets."
+            echo "CI passed successfully. To enable automated CD to Render, configure RENDER_DEPLOY_HOOK_URL in GitHub Repository Settings -> Secrets and variables -> Actions."
             exit 0
           fi
 
-          echo "Triggering Render deployment for commit ${{ github.sha }} on branch main..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$RENDER_DEPLOY_HOOK_URL")
-          HTTP_STATUS=$(echo "$RESPONSE" | tail -n 1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "Triggering zero-downtime production deployment on Render..."
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$RENDER_DEPLOY_HOOK_URL")
+          HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+          HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n1)
 
-          echo "Render deploy response: $BODY"
+          echo "Render Deploy Hook Status: $HTTP_STATUS"
+          echo "Render Deploy Hook Response: $HTTP_BODY"
+
           if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-            echo "Render deployment hook triggered successfully (HTTP $HTTP_STATUS)."
+            echo "Render deployment triggered successfully."
           else
-            echo "::error::Render deployment hook failed with HTTP $HTTP_STATUS: $BODY"
+            echo "::error ::Render deployment trigger failed with HTTP status $HTTP_STATUS"
             exit 1
           fi
 
-      - name: Verify Production Deployment Health
+      - name: Verify Production Health Endpoint
         env:
           RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL }}
         run: |
           if [ -z "$RENDER_SERVICE_URL" ]; then
-            echo "RENDER_SERVICE_URL secret not set. Skipping post-deploy health check ping."
-            echo "To enable automated post-deploy verification, set 'RENDER_SERVICE_URL' (e.g. https://homedesk-facility-portal.onrender.com) in GitHub repository secrets."
+            echo "RENDER_SERVICE_URL secret not provided. Skipping live HTTP health check poll."
             exit 0
           fi
 
           HEALTH_URL="${RENDER_SERVICE_URL%/}/_stcore/health"
-          echo "Starting health verification loop for $HEALTH_URL..."
-
+          echo "Verifying production health at: $HEALTH_URL"
           MAX_ATTEMPTS=30
-          SLEEP_SECONDS=10
           ATTEMPT=1
+          SUCCESS=0
 
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
-            echo "Health check attempt $ATTEMPT of $MAX_ATTEMPTS..."
-            STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$HEALTH_URL" || true)
-
-            if [ "$STATUS_CODE" = "200" ]; then
-              echo "Production service is healthy and responsive (HTTP 200 OK)."
-              exit 0
+            echo "Healthcheck attempt $ATTEMPT of $MAX_ATTEMPTS..."
+            STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || echo "000")
+            if [ "$STATUS_CODE" -eq 200 ]; then
+              echo "Production health check succeeded (HTTP 200 OK)."
+              SUCCESS=1
+              break
             fi
-
-            echo "Status code: $STATUS_CODE. Waiting $SLEEP_SECONDS seconds for Render build/boot..."
-            sleep $SLEEP_SECONDS
+            echo "Service returned HTTP $STATUS_CODE. Waiting 10s for Render rollout..."
+            sleep 10
             ATTEMPT=$((ATTEMPT + 1))
           done
 
-          echo "::error::Production service healthcheck failed to respond with HTTP 200 within $((MAX_ATTEMPTS * SLEEP_SECONDS)) seconds."
-          exit 1
+          if [ $SUCCESS -ne 1 ]; then
+            echo "::error ::Production health check timed out or failed after $MAX_ATTEMPTS attempts."
+            exit 1
+          fi

@@ -4,6 +4,7 @@ Reads credentials strictly from environment variables.
 """
 from typing import Optional, Tuple
 import logging
+import os
 import requests
 from ai.providers.base import BaseAIProvider
 from config import AI_API_KEY, AI_MODEL, AI_TIMEOUT_SECONDS
@@ -20,9 +21,17 @@ class GeminiCloudProvider(BaseAIProvider):
         model: Optional[str] = None,
         timeout: Optional[int] = None,
     ):
-        self._api_key = api_key or AI_API_KEY
-        self._model = model or AI_MODEL or "gemini-1.5-flash"
-        self._timeout = timeout or AI_TIMEOUT_SECONDS or 30
+        self._api_key = (
+            api_key
+            if api_key is not None
+            else (
+                os.getenv("AI_API_KEY")
+                or os.getenv("GEMINI_API_KEY")
+                or AI_API_KEY
+            )
+        )
+        self._model = model or os.getenv("AI_MODEL") or AI_MODEL or "gemini-1.5-flash"
+        self._timeout = timeout or int(os.getenv("AI_TIMEOUT_SECONDS", str(AI_TIMEOUT_SECONDS or 30)))
 
     @property
     def name(self) -> str:
@@ -67,13 +76,60 @@ class GeminiCloudProvider(BaseAIProvider):
             response = requests.post(url, params=params, headers=headers, json=payload, timeout=self._timeout)
 
             if response.status_code == 200:
-                data = response.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts and "text" in parts[0]:
-                        return parts[0]["text"].strip()
-                return "The AI returned an empty response. Please rephrase your question."
+                try:
+                    data = response.json()
+                except Exception as json_err:
+                    logger.error("Failed to parse JSON response from Gemini API: %s", json_err)
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "Received an unparseable response from the Gemini API. "
+                        "Please try again."
+                    )
+
+                if not isinstance(data, dict):
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "Received an unexpected response structure from the Gemini API. "
+                        "Please try again."
+                    )
+
+                candidates = data.get("candidates")
+                if not isinstance(candidates, list) or not candidates:
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "The Gemini API returned an empty or malformed candidate set. "
+                        "Please try again."
+                    )
+
+                first_candidate = candidates[0]
+                if not isinstance(first_candidate, dict):
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "The Gemini API returned an invalid candidate format. "
+                        "Please try again."
+                    )
+
+                content_obj = first_candidate.get("content")
+                if not isinstance(content_obj, dict):
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "The Gemini API response missing content structure. "
+                        "Please try again."
+                    )
+
+                parts = content_obj.get("parts")
+                if not isinstance(parts, list) or not parts or not isinstance(parts[0], dict):
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "The Gemini API response missing parts structure. "
+                        "Please try again."
+                    )
+
+                text = parts[0].get("text")
+                if text is None or not str(text).strip():
+                    return "The AI returned an empty response. Please rephrase your question."
+
+                return str(text).strip()
 
             elif response.status_code in (400, 403):
                 logger.error("Gemini API key rejected or invalid request (HTTP %s).", response.status_code)

@@ -17,10 +17,19 @@ def get_all_tenants() -> List[Dict[str, Any]]:
     try:
         with get_db() as db:
             orgs = db.query(Organization).order_by(Organization.id.asc()).all()
-            return [{"id": o.id, "name": o.name, "slug": o.slug} for o in orgs]
+            return [
+                {
+                    "id": o.id,
+                    "name": o.organization_name,
+                    "slug": o.slug,
+                    "category_id": o.category_id,
+                    "category_name": o.category.name if o.category else None,
+                }
+                for o in orgs
+            ]
     except Exception as exc:
         logger.error("Failed to fetch tenants: %s", exc)
-        return [{"id": 1, "name": "HomeDesk Primary", "slug": DEFAULT_TENANT_SLUG}]
+        return [{"id": 1, "name": "HomeDesk Primary", "slug": DEFAULT_TENANT_SLUG, "category_id": 1, "category_name": "COOK"}]
 
 
 def get_tenant_by_slug(slug: str) -> Optional[Dict[str, Any]]:
@@ -31,7 +40,13 @@ def get_tenant_by_slug(slug: str) -> Optional[Dict[str, Any]]:
         with get_db() as db:
             org = db.query(Organization).filter_by(slug=slug.strip().lower()).first()
             if org:
-                return {"id": org.id, "name": org.name, "slug": org.slug}
+                return {
+                    "id": org.id,
+                    "name": org.organization_name,
+                    "slug": org.slug,
+                    "category_id": org.category_id,
+                    "category_name": org.category.name if org.category else None,
+                }
     except Exception as exc:
         logger.error("Failed to lookup tenant by slug '%s': %s", slug, exc)
     return None
@@ -45,10 +60,17 @@ def get_tenant_by_id(tenant_id: int) -> Optional[Dict[str, Any]]:
         with get_db() as db:
             org = db.query(Organization).filter_by(id=tenant_id).first()
             if org:
-                return {"id": org.id, "name": org.name, "slug": org.slug}
+                return {
+                    "id": org.id,
+                    "name": org.organization_name,
+                    "slug": org.slug,
+                    "category_id": org.category_id,
+                    "category_name": org.category.name if org.category else None,
+                }
     except Exception as exc:
         logger.error("Failed to lookup tenant by id %s: %s", tenant_id, exc)
     return None
+
 
 
 def get_default_tenant() -> Dict[str, Any]:

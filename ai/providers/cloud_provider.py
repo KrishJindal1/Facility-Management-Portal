@@ -5,6 +5,7 @@ Reads credentials strictly from environment variables.
 """
 from typing import Optional, Tuple
 import logging
+import os
 import requests
 from ai.providers.base import BaseAIProvider
 from config import (
@@ -27,10 +28,24 @@ class CloudAIProvider(BaseAIProvider):
         base_url: Optional[str] = None,
         timeout: Optional[int] = None,
     ):
-        self._api_key = api_key or AI_API_KEY
-        self._model = model or AI_MODEL or "gpt-4o-mini"
-        self._base_url = (base_url or AI_API_BASE_URL or "https://api.openai.com/v1").rstrip("/")
-        self._timeout = timeout or AI_TIMEOUT_SECONDS or 30
+        self._api_key = (
+            api_key
+            if api_key is not None
+            else (
+                os.getenv("AI_API_KEY")
+                or os.getenv("OPENAI_API_KEY")
+                or os.getenv("GROQ_API_KEY")
+                or AI_API_KEY
+            )
+        )
+        self._model = model or os.getenv("AI_MODEL") or AI_MODEL or "gpt-4o-mini"
+        self._base_url = (
+            base_url
+            or os.getenv("AI_API_BASE_URL")
+            or AI_API_BASE_URL
+            or "https://api.openai.com/v1"
+        ).rstrip("/")
+        self._timeout = timeout or int(os.getenv("AI_TIMEOUT_SECONDS", str(AI_TIMEOUT_SECONDS or 30)))
 
     @property
     def name(self) -> str:
@@ -83,11 +98,56 @@ class CloudAIProvider(BaseAIProvider):
             )
 
             if response.status_code == 200:
-                data = response.json()
-                choices = data.get("choices", [])
-                if choices and "message" in choices[0]:
-                    return choices[0]["message"].get("content", "").strip()
-                return "The AI returned an empty response. Please rephrase your question."
+                try:
+                    data = response.json()
+                except Exception as json_err:
+                    logger.error("Failed to parse JSON response from Cloud AI: %s", json_err)
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "Received an unparseable response from the AI provider. "
+                        "Please try again."
+                    )
+
+                if not isinstance(data, dict):
+                    logger.error("Cloud AI response JSON is not a dictionary: %s", type(data))
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "Received an unexpected response structure from the AI provider. "
+                        "Please try again."
+                    )
+
+                choices = data.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    logger.warning("Cloud AI response has empty or invalid choices: %s", choices)
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "The AI provider returned an empty or malformed choice set. "
+                        "Please try again."
+                    )
+
+                first_choice = choices[0]
+                if not isinstance(first_choice, dict) or "message" not in first_choice:
+                    logger.warning("Cloud AI response choice missing message: %s", first_choice)
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "The AI provider response missing message content. "
+                        "Please try again."
+                    )
+
+                message = first_choice.get("message")
+                if not isinstance(message, dict) or "content" not in message:
+                    logger.warning("Cloud AI response message missing content: %s", message)
+                    return (
+                        "⚠️ **Malformed AI Response**\n\n"
+                        "The AI provider response missing content field. "
+                        "Please try again."
+                    )
+
+                content = message.get("content")
+                if content is None or not str(content).strip():
+                    return "The AI returned an empty response. Please rephrase your question."
+
+                return str(content).strip()
 
             elif response.status_code == 401:
                 logger.error("Cloud AI authentication failed (HTTP 401).")
