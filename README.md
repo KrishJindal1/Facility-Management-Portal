@@ -12,7 +12,7 @@ HomeDesk is a multi-tenant cloud facility management portal built with **Streaml
 - **Lead Lookup & Tracking**: Real-time status lookup by contact number, scoped strictly to the authenticated tenant.
 - **AI Assistant Widget**: Cloud-native conversational AI powered by OpenAI, Groq, or Google Gemini with local Ollama fallback for offline development.
 - **Production Data Layer**: PostgreSQL source of truth with connection pooling and dialect normalization, plus Excel export capabilities.
-- **Continuous Integration**: GitHub Actions CI pipeline running 44 automated unit and integration tests with a PostgreSQL service container.
+- **Continuous Integration & CD**: Automated GitHub Actions CI/CD pipeline running 115 unit and integration tests with an isolated PostgreSQL service container, automated CI gating, and zero-downtime deployment to Render. See [DEPLOYMENT.md](DEPLOYMENT.md) for full architecture specifications.
 
 ---
 
