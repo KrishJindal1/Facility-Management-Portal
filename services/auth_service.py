@@ -438,8 +438,9 @@ def authenticate_user(email: str, password: str) -> Tuple[bool, str, Optional[Di
         err_msg = str(exc)
         logger.exception("Authentication error for '%s': %s", clean_email, exc)
 
-        # Check for uninitialized database schema and auto-heal
-        if "relation \"users\" does not exist" in err_msg.lower() or "no such table: users" in err_msg.lower() or "undefinedtable" in err_msg.lower():
+        # Check for uninitialized database schema or missing columns and auto-heal
+        schema_markers = ("relation \"users\" does not exist", "no such table: users", "undefinedtable", "column users.phone does not exist", "undefinedcolumn", "no such column")
+        if any(marker in err_msg.lower() for marker in schema_markers):
             try:
                 from database.repository import init_database
                 logger.info("Database tables missing during authentication. Running auto-initialization...")

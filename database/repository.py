@@ -116,23 +116,115 @@ def resolve_controlled_category(category_name_or_id: Any) -> Optional[Category]:
     return None
 
 
+def _migrate_existing_schema(engine):
+    """
+    Safely upgrades existing legacy database tables by adding any missing columns
+    (e.g., users.phone from mobile, organizations.organization_name from name,
+    organizations.category_id, etc.) without dropping tables or losing data.
+    """
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
+    is_postgres = (getattr(engine.dialect, "name", "") == "postgresql")
+
+    with engine.connect() as conn:
+        # 1. Migrate 'organizations' table
+        if "organizations" in existing_tables:
+            try:
+                org_cols = {c["name"] for c in inspector.get_columns("organizations")}
+                if "organization_name" not in org_cols:
+                    if "name" in org_cols:
+                        conn.execute(text("ALTER TABLE organizations ADD COLUMN organization_name VARCHAR(100)"))
+                        conn.execute(text("UPDATE organizations SET organization_name = name WHERE organization_name IS NULL"))
+                    else:
+                        conn.execute(text("ALTER TABLE organizations ADD COLUMN organization_name VARCHAR(100) DEFAULT 'Organization' NOT NULL"))
+                    conn.commit()
+
+                if "phone" not in org_cols:
+                    conn.execute(text("ALTER TABLE organizations ADD COLUMN phone VARCHAR(20)"))
+                    conn.commit()
+
+                if "email" not in org_cols:
+                    conn.execute(text("ALTER TABLE organizations ADD COLUMN email VARCHAR(120)"))
+                    conn.commit()
+
+                if "status" not in org_cols:
+                    conn.execute(text("ALTER TABLE organizations ADD COLUMN status VARCHAR(30) DEFAULT 'active' NOT NULL"))
+                    conn.commit()
+
+                if "password_hash" not in org_cols:
+                    conn.execute(text("ALTER TABLE organizations ADD COLUMN password_hash VARCHAR(255)"))
+                    conn.commit()
+
+                if "category_id" not in org_cols:
+                    conn.execute(text("ALTER TABLE organizations ADD COLUMN category_id INTEGER"))
+                    conn.commit()
+            except Exception as org_mig_err:
+                logger.warning("Organizations table migration notice: %s", org_mig_err)
+
+        # 2. Migrate 'users' table
+        if "users" in existing_tables:
+            try:
+                user_cols = {c["name"] for c in inspector.get_columns("users")}
+                if "phone" not in user_cols:
+                    logger.info("Migrating legacy users table: adding phone column from mobile...")
+                    if "mobile" in user_cols:
+                        if is_postgres:
+                            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)"))
+                        else:
+                            conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(20)"))
+                        conn.execute(text("UPDATE users SET phone = mobile WHERE phone IS NULL AND mobile IS NOT NULL"))
+                        conn.execute(text("UPDATE users SET phone = '0000000000' WHERE phone IS NULL"))
+                    else:
+                        if is_postgres:
+                            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20) DEFAULT '0000000000'"))
+                        else:
+                            conn.execute(text("ALTER TABLE users ADD COLUMN phone VARCHAR(20) DEFAULT '0000000000'"))
+                    conn.commit()
+
+                if "role" not in user_cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(30) DEFAULT 'user'"))
+                    else:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(30) DEFAULT 'user'"))
+                    conn.commit()
+
+                if "password_hash" not in user_cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)"))
+                    else:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
+                    conn.commit()
+
+                if "organization_id" not in user_cols:
+                    if is_postgres:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS organization_id INTEGER"))
+                    else:
+                        conn.execute(text("ALTER TABLE users ADD COLUMN organization_id INTEGER"))
+                    conn.commit()
+            except Exception as user_mig_err:
+                logger.warning("Users table migration notice: %s", user_mig_err)
+
+        try:
+            conn.commit()
+        except Exception:
+            pass
+
+
 def init_database() -> bool:
     """
-    Initializes database schema tables and seeds default categories,
-    organizations, and admin user. Safe to invoke multiple times.
+    Initializes database schema tables, runs non-destructive column migrations on legacy schemas,
+    and seeds default categories, organizations, and admin user. Safe to invoke multiple times.
     """
     try:
-        from sqlalchemy import inspect
         active_engine = db_conn.engine
-        inspector = inspect(active_engine)
-        existing_tables = inspector.get_table_names()
-        if "organizations" in existing_tables:
-            cols = [c["name"] for c in inspector.get_columns("organizations")]
-            if "organization_name" not in cols or "category_id" not in cols:
-                logger.info("Upgrading legacy database schema to Phase 2 models...")
-                Base.metadata.drop_all(bind=active_engine)
+        
+        # 1. Run safe column migrations on any existing legacy tables
+        _migrate_existing_schema(active_engine)
 
+        # 2. Create any missing tables (categories, requirements, etc.)
         Base.metadata.create_all(bind=active_engine)
+
         with get_db() as db:
             # 1. Seed Categories
             category_defs = [
