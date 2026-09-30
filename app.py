@@ -1130,7 +1130,7 @@ def render_home():
     render_hero()
     render_service_cards()
     st.markdown(
-        '<div class="footer-note">No spam calls. Just genuine requests, routed straight to your inbox.</div>',
+        '<div class="footer-note">HomeDesk v2.2 — No spam calls. Just genuine requests, routed straight to verified service providers.</div>',
         unsafe_allow_html=True,
     )
 
