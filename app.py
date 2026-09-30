@@ -41,15 +41,25 @@ st.set_page_config(
 
 # Startup initialization & database health check
 try:
+    from database.connection import check_connection, get_db
+    from database.models import User
+    from database.repository import init_database
     create_excel_if_not_exists()
+
+    _db_ok, _db_msg = check_connection()
+    if not _db_ok:
+        st.error(f"⚠️ **Database Unavailable**: {_db_msg}. Please verify your `DATABASE_URL` configuration.")
+    else:
+        try:
+            with get_db() as _db_test:
+                _db_test.query(User).first()
+        except Exception as _schema_err:
+            import logging
+            logging.getLogger("homedesk.app").warning("Schema missing on startup; running init_database(): %s", _schema_err)
+            init_database()
 except Exception as _init_err:
     import logging
     logging.getLogger("homedesk.app").error("Startup initialization warning: %s", _init_err)
-
-from database.connection import check_connection
-_db_ok, _db_msg = check_connection()
-if not _db_ok:
-    st.error(f"⚠️ **Database Unavailable**: {_db_msg}. Please verify your `DATABASE_URL` configuration.")
 
 if "selected_service" not in st.session_state:
     st.session_state.selected_service = None

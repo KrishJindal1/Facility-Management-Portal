@@ -366,8 +366,28 @@ def register_user(
             return True, "Account created successfully.", user_data
 
     except Exception as exc:
-        logger.error("Registration error: %s", exc)
-        return False, "An error occurred during registration. Please try again.", None
+        err_msg = str(exc)
+        logger.exception("Registration error: %s", exc)
+        if "relation \"users\" does not exist" in err_msg.lower() or "no such table: users" in err_msg.lower() or "undefinedtable" in err_msg.lower():
+            try:
+                from database.repository import init_database
+                logger.info("Database tables missing during registration. Running auto-initialization...")
+                if init_database():
+                    return register_user(
+                        name=clean_name,
+                        email=clean_email,
+                        mobile=clean_mobile,
+                        password=password,
+                        organization_id=organization_id,
+                        new_org_name=new_org_name,
+                        category_id=category_id,
+                        category_name=category_name,
+                        role=role,
+                    )
+            except Exception as auto_init_err:
+                logger.error("Auto-initialization during registration failed: %s", auto_init_err)
+                return False, f"Database table setup required: {auto_init_err}", None
+        return False, f"Registration service error: {err_msg}", None
 
 
 def authenticate_user(email: str, password: str) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
@@ -415,8 +435,43 @@ def authenticate_user(email: str, password: str) -> Tuple[bool, str, Optional[Di
             return True, "Login successful.", user_data
 
     except Exception as exc:
-        logger.error("Authentication error: %s", exc)
-        return False, "Authentication service error. Please try again later.", None
+        err_msg = str(exc)
+        logger.exception("Authentication error for '%s': %s", clean_email, exc)
+
+        # Check for uninitialized database schema and auto-heal
+        if "relation \"users\" does not exist" in err_msg.lower() or "no such table: users" in err_msg.lower() or "undefinedtable" in err_msg.lower():
+            try:
+                from database.repository import init_database
+                logger.info("Database tables missing during authentication. Running auto-initialization...")
+                if init_database():
+                    with get_db() as db:
+                        retry_user = db.query(User).filter_by(email=clean_email).first()
+                        if retry_user and retry_user.password_hash and verify_password(password, retry_user.password_hash):
+                            retry_org = retry_user.organization
+                            user_data = {
+                                "id": retry_user.id,
+                                "name": retry_user.name,
+                                "email": retry_user.email,
+                                "mobile": retry_user.phone,
+                                "phone": retry_user.phone,
+                                "role": retry_user.role,
+                                "canonical_role": normalize_role(retry_user.role),
+                                "organization_id": retry_user.organization_id if normalize_role(retry_user.role) != ROLE_NORMAL_USER else None,
+                                "organization_name": retry_org.organization_name if (retry_org and normalize_role(retry_user.role) != ROLE_NORMAL_USER) else None,
+                                "organization_slug": retry_org.slug if (retry_org and normalize_role(retry_user.role) != ROLE_NORMAL_USER) else None,
+                                "category_id": retry_org.category_id if (retry_org and normalize_role(retry_user.role) != ROLE_NORMAL_USER) else None,
+                                "category_name": retry_org.category.name if (retry_org and retry_org.category and normalize_role(retry_user.role) != ROLE_NORMAL_USER) else None,
+                                "is_authenticated": True,
+                            }
+                            user_data["token"] = generate_auth_token(user_data)
+                            return True, "Login successful.", user_data
+                        elif not retry_user:
+                            return False, "Invalid email or password.", None
+            except Exception as auto_init_err:
+                logger.error("Auto-initialization during auth failed: %s", auto_init_err)
+                return False, f"Database table setup required: {auto_init_err}", None
+
+        return False, f"Authentication service error: {err_msg}", None
 
 
 # --- Streamlit Session State Management ---
