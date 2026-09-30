@@ -7,9 +7,10 @@ Implements Phase 2 business model:
    organization.category_id == requirement.category_id
 4. Excel exports are dynamically generated from PostgreSQL data.
 """
+from __future__ import annotations
 from datetime import datetime, date, timezone
 import re
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Tuple
 import logging
 from sqlalchemy import select, and_
 from database import connection as db_conn
